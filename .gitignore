@@ -128,6 +128,9 @@ backup/
 __pycache__/
 *.pyc
 .venv/
+venv/
+env/
+.pytest_cache/
 .env
 sim/*.egg-info/
 
@@ -169,3 +172,22 @@ pdf_*.txt
 /EOF
 /服务端
 /southeast.png
+
+
+/.venv-mqtt
+
+# 本机凭据、私钥与认证信息不得进入公开仓库
+id_rsa
+id_ed25519
+id_ecdsa
+*.pem
+*.key
+*.p12
+*.pfx
+.netrc
+.git-credentials
+credentials.json
+
+# AI 协作的临时输入与输出目录仅供本地使用
+/docs/ai_temporary/
+/docs/ai_output/
