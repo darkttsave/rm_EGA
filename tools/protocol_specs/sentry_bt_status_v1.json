@@ -1,0 +1,38 @@
+{
+  "protocol_name": "sentry_bt_status",
+  "protocol_version": "v1",
+  "description": "NUC/C 板通过官方命令字 0x0310 上报的哨兵 4 字节自定义数据块；到达自定义客户端后由 MQTT Topic CustomByteBlock 承载，业务字节位于 robomaster.CustomByteBlock.data。",
+  "mqtt_topic": "CustomByteBlock",
+  "protobuf_message_type": "robomaster.CustomByteBlock",
+  "protobuf_data_field": "data",
+  "source_command_id": "0x0310",
+  "payload_length": 4,
+  "byte_order": "little",
+  "max_rate_hz": 50.0,
+  "fields": [
+    {
+      "name": "current_stance",
+      "offset": 0,
+      "type": "uint8",
+      "byte_order": "little"
+    },
+    {
+      "name": "bt_remain_time",
+      "offset": 1,
+      "type": "uint16",
+      "byte_order": "little"
+    },
+    {
+      "name": "bt_game_status",
+      "offset": 3,
+      "type": "uint8",
+      "byte_order": "little"
+    }
+  ],
+  "notes": [
+    "payload_length 指 CustomByteBlock.data 的预期字节数。",
+    "byte_order 为顶层默认字节序，字段可用自己的 byte_order 覆盖。",
+    "本文件只描述字节布局，不定义 current_stance 与 bt_game_status 的取值语义；",
+    "姿态枚举语义须经官方协议或上位机确认后再补充，不得在此臆测。"
+  ]
+}
