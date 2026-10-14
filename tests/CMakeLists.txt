@@ -167,6 +167,41 @@ target_link_libraries(test_config_manager_video PRIVATE
     Qt6::Core Qt6::Test RoboMasterClientLib)
 rm26_add_qt_test(TestConfigManagerVideo test_config_manager_video)
 
+# 哨兵 0x0310 4 字节自定义状态解析器测试
+add_executable(test_sentry_bt_status_parser
+    unit/test_sentry_bt_status_parser.cpp)
+target_link_libraries(test_sentry_bt_status_parser PRIVATE
+    Qt6::Core Qt6::Test RoboMasterClientLib)
+# 解析器测试用 JSON 协议描述作为独立对照，需要知道仓库根目录
+target_compile_definitions(test_sentry_bt_status_parser PRIVATE
+    RM26_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+rm26_add_qt_test(TestSentryBtStatusParser test_sentry_bt_status_parser)
+
+# 哨兵临时诊断状态（GameData）状态层测试
+add_executable(test_sentry_bt_status_state unit/test_sentry_bt_status_state.cpp)
+target_link_libraries(test_sentry_bt_status_state PRIVATE
+    Qt6::Core Qt6::Test RoboMasterClientLib)
+rm26_add_qt_test(TestSentryBtStatusState test_sentry_bt_status_state)
+set_property(TEST TestSentryBtStatusState APPEND PROPERTY ENVIRONMENT
+    "QT_QPA_PLATFORM=offscreen")
+
+# MQTT CustomByteBlock → NetworkManager → 解析器 → GameData 入口测试
+add_executable(test_sentry_bt_status_network_entry
+    unit/test_sentry_bt_status_network_entry.cpp)
+target_link_libraries(test_sentry_bt_status_network_entry PRIVATE
+    Qt6::Core Qt6::Test RoboMasterClientLib protobuf::libprotobuf)
+rm26_add_qt_test(TestSentryBtStatusNetworkEntry test_sentry_bt_status_network_entry)
+set_property(TEST TestSentryBtStatusNetworkEntry APPEND PROPERTY ENVIRONMENT
+    "QT_QPA_PLATFORM=offscreen")
+
+# 哨兵临时诊断 QML 组件的加载与绑定测试
+add_executable(test_sentry_bt_status_qml unit/test_sentry_bt_status_qml.cpp)
+target_link_libraries(test_sentry_bt_status_qml PRIVATE
+    Qt6::Core Qt6::Qml Qt6::Quick Qt6::Test RoboMasterClientLib)
+rm26_add_qt_test(TestSentryBtStatusQml test_sentry_bt_status_qml)
+set_property(TEST TestSentryBtStatusQml APPEND PROPERTY ENVIRONMENT
+    "QT_QPA_PLATFORM=offscreen")
+
 # 性能基准测试
 add_executable(test_benchmark benchmark/test_benchmark.cpp)
 target_link_libraries(test_benchmark PRIVATE Qt6::Core Qt6::Test RoboMasterClientLib protobuf::libprotobuf)

@@ -316,6 +316,8 @@ set(SOURCES
     src/network/H264AnnexB.h
     src/network/H264StreamRecoveryPolicy.cpp
     src/network/H264StreamRecoveryPolicy.h
+    src/network/SentryBtStatusParser.cpp
+    src/network/SentryBtStatusParser.h
     src/network/CRC.cpp
     src/network/MqttManager.cpp
     src/network/MqttLogger.cpp
@@ -367,6 +369,7 @@ set(HEADERS
     src/network/MqttLogger.h
     src/network/H264AnnexB.h
     src/network/H264StreamRecoveryPolicy.h
+    src/network/SentryBtStatusParser.h
     src/network/S1ProtocolManager.h
     src/core/GameData.h
     src/core/LogFileNaming.h

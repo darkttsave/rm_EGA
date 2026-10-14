@@ -13,6 +13,7 @@
 #define GAMEDATA_H
 
 #include "../network/Protocol.h"
+#include "../network/SentryBtStatusParser.h"
 #include "TimedEventRules.h"
 #include <QDateTime>
 #include <QImage>
@@ -671,6 +672,8 @@ Q_PROPERTY(QVariantMap robotRespawnStatus READ robotRespawnStatus NOTIFY robotRe
   // === 自定义 UI 数据 (通过 CustomByteBlock 接收) ===
   Q_PROPERTY(QVariantMap myRobotCustomData READ getMyRobotCustomData NOTIFY robotCustomDataUpdated)
   Q_PROPERTY(bool customUIEnabled READ customUIEnabled WRITE setCustomUIEnabled NOTIFY customUIEnabledChanged)
+  // 哨兵 0x0310 自定义消息的临时诊断状态；仅本轮诊断使用，不属于正式比赛状态。
+  Q_PROPERTY(QVariantMap sentryStatusPreview READ getSentryStatusPreview NOTIFY sentryStatusPreviewChanged)
 
   // === 兑换系统 ===
   Q_PROPERTY(int ammo17mmExchangeCount READ ammo17mmExchangeCount NOTIFY exchangeCountsUpdated)
@@ -797,6 +800,24 @@ public:
   }
   bool customUIEnabled() const { return m_customUIEnabled; }
   void setCustomUIEnabled(bool v);
+
+  /**
+   * @brief 哨兵 0x0310 自定义消息的临时诊断预览。
+   * @details 键包含 received、JSON 中定义的原始字段、rawHex、receivedAtMs 与
+   *          供 UI 数据驱动渲染的 fields 列表；不包含任何业务语义解释。
+   *          未收到合法消息时返回空 map。
+   */
+  QVariantMap getSentryStatusPreview() const { return m_sentryStatusPreview; }
+
+  /**
+   * @brief 更新哨兵自定义状态临时预览。
+   * @param status       已解析成功的原始字段
+   * @param rawHex       原始载荷十六进制（诊断用）
+   * @param receivedAtMs 接收时间（毫秒时间戳）
+   * @note 只允许用解析成功的消息调用，非法消息不得覆盖上一条合法状态。
+   */
+  void updateSentryBtStatusPreview(const RM::SentryBtStatus &status,
+                                   const QString &rawHex, qint64 receivedAtMs);
 
   bool redOutpostDestroyed() const { return m_redOutpostData.isDestroyed; }
   bool blueOutpostDestroyed() const { return m_blueOutpostData.isDestroyed; }
@@ -1286,6 +1307,9 @@ signals:
   // ===== 自定义 UI 数据更新信号 =====
   void robotCustomDataUpdated(quint8 robotId);
 
+  // ~ 哨兵 0x0310 临时诊断预览更新信号（仅诊断使用）
+  void sentryStatusPreviewChanged();
+
   // ~ 面板伤害统计刷新信号
   void injuryStatsUpdated();
 
@@ -1442,6 +1466,9 @@ private:
   QVariantList m_systemMessages;
   QStringList m_robotMessages;
   bool m_customUIEnabled = true;
+
+  // 哨兵 0x0310 自定义消息的临时诊断预览；未收到合法消息时 received 保持 false。
+  QVariantMap m_sentryStatusPreview{{QStringLiteral("received"), false}};
 
   // 信号节流：避免高频 dataChanged 阻塞 UI 线程
   qint64 m_lastDataChangedMs = 0;

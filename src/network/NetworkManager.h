@@ -31,6 +31,7 @@
 // --- 头文件包含 ---
 #include "../core/GameData.h" // 比赛数据中心，用于存储解析后的比赛状态
 #include "Protocol.h"         // 协议处理类，提供 Protobuf 序列化/反序列化
+#include "SentryBtStatusParser.h" // 哨兵 0x0310 4 字节自定义状态解析器
 #include <QHostAddress>       // Qt 网络地址类
 #include <QObject>            // Qt 基础对象类
 #include <QUdpSocket>         // Qt UDP 套接字类
@@ -391,14 +392,19 @@ private:
   void processData(const QByteArray &data);
 
 #ifdef RM_HAS_MQTT
-  // --- MQTT 相关私有方法 ---
-
+  // --- MQTT 相关私有槽 ---
+private slots:
   /**
    * @brief 处理 MQTT 消息
    * @param topic 主题名称
    * @param payload 消息载荷
+   * @details 既作为 MqttManager 信号的接收槽，也供自动测试直接驱动，
+   *          使测试覆盖与生产环境完全相同的处理路径。
    */
   void processMqttMessage(const QString &topic, const QByteArray &payload);
+
+private:
+  // --- MQTT 相关私有方法 ---
 
   /**
    * @brief 解析 CustomByteBlock 数据
@@ -406,6 +412,15 @@ private:
    * @details 解析机器人自定义状态并更新 GameData
    */
   void parseCustomByteBlock(const QByteArray &data);
+
+  /**
+   * @brief 旁路观察官方命令字 0x0310 的哨兵 4 字节自定义状态
+   * @param data 已从 CustomByteBlock 取出的业务字节
+   * @details 只读取一份数据，不改变既有视频/自定义数据转发路径；
+   *          长度不符时不做任何事，也不输出日志；
+   *          诊断日志仅在解析值发生变化时输出，避免按帧刷屏。
+   */
+  void observeSentryBtStatus(const QByteArray &data);
 
   /**
    * @brief 订阅所有需要的 MQTT Topic
@@ -419,6 +434,10 @@ private:
       robomaster::STAGE_NOT_STARTED; ///< 最近一次 MQTT 比赛阶段
   quint16 m_lastMqttTimeRemaining = 420; ///< 最近一次 MQTT 阶段剩余时间 (秒)
   bool m_lastMqttPaused = false;         ///< 最近一次 MQTT 暂停状态
+
+  // 哨兵 0x0310 旁路观察：仅用于判断诊断日志是否需要输出
+  bool m_hasSentryBtStatus = false;      ///< 是否已成功解析过一条哨兵消息
+  SentryBtStatus m_lastSentryBtStatus;   ///< 最近一次成功解析的原始字段
 #endif
 
   qint64 m_lastCommonCommandSentMs = 0;  ///< CommonCommand 最近发送时间戳（ms）

@@ -1555,6 +1555,10 @@ void NetworkManager::processMqttMessage(const QString &topic,
       data = data.mid(3);
     }
 
+    // 旁路观察：官方命令字 0x0310 的哨兵 4 字节自定义状态。
+    // 只读取同一份 data，不截断、不吞掉、也不重定向既有视频/自定义数据路径。
+    observeSentryBtStatus(data);
+
     if (!data.isEmpty()) {
       if (detailedVideoTrace) {
         const QByteArray prefix = data.left(8).toHex();
@@ -1771,6 +1775,39 @@ void NetworkManager::parseCustomByteBlock(const QByteArray &data) {
              << "fric=" << robot.fricEnabled
              << "cap=" << robot.superCapEnergyPercent << "%"
              << "angle=" << robot.gimbalChassisAngle;
+}
+
+void NetworkManager::observeSentryBtStatus(const QByteArray &data) {
+  const SentryBtStatusParseResult result = parseSentryBtStatus(data);
+
+  // 长度不等于协议 payload_length 的数据（例如 H.264 视频分片）不是哨兵状态：
+  // 静默忽略，既不更新状态也不输出日志。
+  if (!result.ok) {
+    return;
+  }
+
+  const SentryBtStatus &status = result.status;
+  const bool changed =
+      !m_hasSentryBtStatus ||
+      m_lastSentryBtStatus.currentStance != status.currentStance ||
+      m_lastSentryBtStatus.btRemainTime != status.btRemainTime ||
+      m_lastSentryBtStatus.btGameStatus != status.btGameStatus;
+
+  if (m_gameData) {
+    m_gameData->updateSentryBtStatusPreview(
+        status, result.rawHex, QDateTime::currentMSecsSinceEpoch());
+  }
+
+  // 高频上报时只在解析值发生变化时输出，避免刷屏。
+  if (changed) {
+    m_lastSentryBtStatus = status;
+    m_hasSentryBtStatus = true;
+    qInfo() << "NetworkManager: sentry bt status"
+            << "current_stance=" << status.currentStance
+            << "bt_remain_time=" << status.btRemainTime
+            << "bt_game_status=" << status.btGameStatus
+            << "raw_hex=" << result.rawHex;
+  }
 }
 
 #endif // RM_HAS_MQTT

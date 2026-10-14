@@ -4828,3 +4828,31 @@ void GameData::setCustomUIEnabled(bool v) {
     emit customUIEnabledChanged();
   }
 }
+
+void GameData::updateSentryBtStatusPreview(const RM::SentryBtStatus &status,
+                                           const QString &rawHex,
+                                           qint64 receivedAtMs) {
+  // 临时诊断状态：只保存原始数值，不解释姿态/局状态业务语义，
+  // 也不与正式比赛状态字段混在一起。
+  QVariantMap preview;
+  preview.insert(QStringLiteral("received"), true);
+  preview.insert(QStringLiteral("rawHex"), rawHex);
+  preview.insert(QStringLiteral("receivedAtMs"), receivedAtMs);
+
+  QVariantList fieldList;
+  const QList<RM::SentryBtStatusField> fields =
+      RM::sentryBtStatusFieldList(status);
+  for (const RM::SentryBtStatusField &field : fields) {
+    // 顶层平铺便于直接读取；fields 列表供 QML 数据驱动渲染，
+    // 使 QML 不需要重复协议字段名。
+    preview.insert(field.name, field.value);
+    QVariantMap item;
+    item.insert(QStringLiteral("name"), field.name);
+    item.insert(QStringLiteral("value"), field.value);
+    fieldList.append(item);
+  }
+  preview.insert(QStringLiteral("fields"), fieldList);
+
+  m_sentryStatusPreview = preview;
+  emit sentryStatusPreviewChanged();
+}

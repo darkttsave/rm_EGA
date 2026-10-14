@@ -37,6 +37,7 @@
         <file>CustomUI/ChassisModePanel.qml</file>
         <file>CustomUI/SuperCapacitorBar.qml</file>
         <file>CustomUI/GimbalAngleIndicator.qml</file>
+        <file>CustomUI/SentryStatusPreview.qml</file>
         <file>Tactical/TacticalCommandPage.qml</file>
         <file>Tactical/TacticalLargeMapOverlay.qml</file>
         <file>Tactical/TacticalMock.qml</file>
