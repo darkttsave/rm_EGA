@@ -42,7 +42,86 @@ JSON 只用于本地描述协议，**不作为 MQTT payload 发送**。
 `current_stance` 与 `bt_game_status` 的**取值语义（进攻/防守/撤退/待命等）尚未确认**，
 因此 JSON 与本工具都只保留原始数值，不做任何业务解释。
 
-## 4. 运行命令示例
+## 4. 环境准备与运行
+
+本工具依赖两个第三方包，且版本都有明确约束；下面给出从零开始的完整步骤。
+
+### 4.1 依赖与版本要求
+
+| 依赖 | 版本要求 | 为什么是这个范围 |
+| --- | --- | --- |
+| Python | ≥ 3.11 | 与 `sim/pyproject.toml` 的 `requires-python` 一致 |
+| `paho-mqtt` | ≥ 2.0 | 代码使用 `CallbackAPIVersion.VERSION2`，该 API 由 paho 2.0 引入 |
+| `protobuf` | ≥ 6.33.2, < 7 | `sim/robomaster_pb2.py` 的 gencode 为 6.33.2，导入时会自校验运行时版本 |
+
+`protobuf` 的范围与 `sim/requirements.txt`、`sim/pyproject.toml` 保持一致（同一口径，
+由 `tools/release/check_sim_protobuf_runtime.py` 从 pb2 生成代码推导）。
+
+**不需要** Qt、系统 `protoc` 或 ROS：本工具只用到 Python 标准库加上述两个包。
+
+### 4.2 用哪个解释器
+
+两条等价路径，按手头情况选一条：
+
+- **A. 复用模拟器 venv**：若已按 [`sim/README.md`](../sim/README.md) 建好 `sim/.venv`，
+  它已包含 `paho-mqtt 2.1.0` 与 `protobuf 6.33.6`，满足要求，直接用
+  `sim/.venv/bin/python` 即可，不需要再安装任何东西。
+- **B. 专用 venv `.venv-mqtt`**：只想跑本工具时更轻量，步骤见 4.3 / 4.4。
+
+`.venv-mqtt/` 与 `sim/.venv/` 都被 `.gitignore` 忽略，**不会随 clone 出现**，
+换机器后必须重新创建。
+
+### 4.3 创建虚拟环境（路径 B）
+
+在仓库根目录执行：
+
+```bash
+python3 -m venv .venv-mqtt
+source .venv-mqtt/bin/activate
+python -m pip install --upgrade pip setuptools wheel
+```
+
+Windows PowerShell：
+
+```powershell
+py -3.11 -m venv .venv-mqtt
+.venv-mqtt/Scripts/Activate.ps1
+python -m pip install --upgrade pip setuptools wheel
+```
+
+与仓库其余部分保持一致：**不要**用 `sudo pip` 或 `--break-system-packages` 安装依赖。
+
+### 4.4 安装依赖（路径 B）
+
+```bash
+python -m pip install 'paho-mqtt>=2.0' 'protobuf>=6.33.2,<7'
+```
+
+`<7` 的上限不是随手写的：`sim/robomaster_pb2.py` 导入时会调用
+`ValidateProtobufRuntimeVersion`，主版本不符会直接失败。安装后即得到验证过的组合
+（`paho-mqtt 2.1.0` + `protobuf 6.33.2`）。
+
+### 4.5 自检
+
+```bash
+python -c "import paho.mqtt, google.protobuf as g; print('paho', paho.mqtt.__version__); print('protobuf', g.__version__); print(g.__file__)"
+python tools/mqtt_custom_protocol_validator.py --help
+```
+
+期望输出类似（路径随你的 venv 位置而变）：
+
+```text
+paho 2.1.0
+protobuf 6.33.2
+/<仓库路径>/.venv-mqtt/lib/python3.12/site-packages/google/protobuf/__init__.py
+```
+
+- `--help` 不导入任何第三方依赖（依赖是延迟导入），裸解释器也能执行，可用来判断脚本本身是否完好；
+- 若 `g.__file__` 不落在你所选的 venv 内，说明 `PYTHONPATH` 上有别的 `protobuf` 抢先
+  （`PYTHONPATH` 在 `sys.path` 中先于 site-packages）。本机 ROS 的 `PYTHONPATH` 不含
+  `google` / `paho`，因此不冲突；换机器时用这条命令确认最稳妥。
+
+### 4.6 运行命令示例
 
 连接现场 Broker 必须显式给出 `--broker`、`--port`、`--client-id` 与
 `--allow-live-connect`；缺少 `--allow-live-connect` 时会拒绝连接并提示
@@ -59,7 +138,9 @@ JSON 只用于本地描述协议，**不作为 MQTT payload 发送**。
   --allow-live-connect
 ```
 
-参数说明：
+把开头的解释器换成你实际选用的那个（例如 `sim/.venv/bin/python`，或激活 venv 后直接用 `python`）。
+
+### 4.7 参数说明
 
 | 参数 | 说明 |
 | --- | --- |
@@ -72,11 +153,28 @@ JSON 只用于本地描述协议，**不作为 MQTT payload 发送**。
 | `--rate-window` | 频率统计窗口秒数，默认 1 |
 | `--max-rate-hz` | 频率告警上限，默认取 JSON 中的 `max_rate_hz`（50Hz） |
 
-依赖：`paho-mqtt`（连接 Broker）与 `protobuf` 运行时（解析 `CustomByteBlock`）。
-本机已在 `.venv-mqtt` 中准备，故示例使用 `.venv-mqtt/bin/python`。
+### 4.8 退出码
 
-退出码：`0` 至少收到一个合法数据包；`2` 超时前未收到合法数据包；
-`1` 环境或配置错误；`130` 被 Ctrl-C 中断。
+`0` 至少收到一个合法数据包；`2` 超时前未收到合法数据包；`1` 环境或配置错误；
+`130` 被 Ctrl-C 中断。
+
+### 4.9 依赖缺失或版本不符
+
+| 现象 | 原因 | 处理 |
+| --- | --- | --- |
+| `错误：无法导入 .../sim/robomaster_pb2.py：No module named 'google'`，并提示 `protobuf>=6.33.2,<7` | 用了没装依赖的系统 `python3` | 改用 4.2 选定的 venv 解释器 |
+| `错误：未安装 paho-mqtt，无法连接 broker` | 缺 `paho-mqtt`；**只在真正连接时**才暴露，解析与 `--help` 不受影响 | 按 4.4 安装 |
+| protobuf 版本不符（过旧或 7.x） | 未按范围安装 | 按 `>=6.33.2,<7` 重装 |
+| `.venv-mqtt/bin/python: No such file or directory` | venv 未创建（被 gitignore，不随 clone） | 按 4.3 创建 |
+
+用未装依赖的系统 `python3` 跑测试会得到 `Ran 41 tests … OK (skipped=1)`：涉及真实
+Protobuf 编解码的用例会被跳过，**这不是全部通过**。要完整验证必须用装好依赖的解释器：
+
+```bash
+.venv-mqtt/bin/python -m unittest tools.tests.test_mqtt_custom_protocol_validator
+```
+
+期望结果是 `Ran 52 tests … OK`。
 
 ## 5. PASS、NOT_MATCH、FAIL 的含义
 
