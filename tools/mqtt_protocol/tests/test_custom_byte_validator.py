@@ -1,10 +1,10 @@
-"""_mqtt_custom_protocol_validator 的离线单元测试。
+"""custom_byte_validator 的离线单元测试。
 
 不依赖正在运行的 MQTT broker：连接流程用假客户端与假时钟驱动。
 
 运行：
-    .venv-mqtt/bin/python -m unittest tools.tests.test_mqtt_custom_protocol_validator
-    python3 -m unittest tools.tests.test_mqtt_custom_protocol_validator
+    .venv-mqtt/bin/python -m unittest discover -s tools/mqtt_protocol/tests -p 'test_*.py' -v
+    .venv-mqtt/bin/python -m unittest tools.mqtt_protocol.tests.test_custom_byte_validator
 
 未安装 protobuf 运行时（sim/robomaster_pb2.py 所需）时，涉及真实 Protobuf
 编解码的用例会以 skip 呈现，其余用例仍会执行。
@@ -21,14 +21,14 @@ import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 
-TOOLS_DIR = Path(__file__).resolve().parents[1]
-PROJECT_ROOT = TOOLS_DIR.parent
-if str(TOOLS_DIR) not in sys.path:
-    sys.path.insert(0, str(TOOLS_DIR))
+PACKAGE_DIR = Path(__file__).resolve().parents[1]
+PROJECT_ROOT = PACKAGE_DIR.parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
-import mqtt_custom_protocol_validator as validator  # noqa: E402
+from tools.mqtt_protocol import custom_byte_validator as validator  # noqa: E402
 
-SPEC_PATH = TOOLS_DIR / "protocol_specs/sentry_bt_status_v1.json"
+SPEC_PATH = PACKAGE_DIR / "protocol_specs/sentry_bt_status_v1.json"
 
 try:  # pragma: no cover - 仅用于在缺少运行时的情况下降级
     import google.protobuf  # noqa: F401
@@ -288,7 +288,7 @@ class SpecValidationTest(unittest.TestCase):
 
     def test_missing_spec_file_is_reported(self) -> None:
         with self.assertRaises(validator.SpecError):
-            validator.ProtocolSpec.load(TOOLS_DIR / "protocol_specs/does_not_exist.json")
+            validator.ProtocolSpec.load(PACKAGE_DIR / "protocol_specs/does_not_exist.json")
 
     def test_invalid_json_is_reported(self) -> None:
         path = PROJECT_ROOT / "tmp" / "validator-bad-spec.json"
@@ -688,34 +688,6 @@ class RunValidatorFlowTest(unittest.TestCase):
         )
 
         self.assertEqual(validator.EXIT_ERROR, code)
-
-
-class PortProbeTest(unittest.TestCase):
-    """端口预检受 --timeout 预算约束，且只依赖本机回环。"""
-
-    def test_open_port_is_detected(self) -> None:
-        import socket
-
-        server = socket.socket()
-        server.bind(("127.0.0.1", 0))
-        server.listen(1)
-        port = server.getsockname()[1]
-        try:
-            self.assertTrue(
-                validator.wait_for_port(
-                    "127.0.0.1", port, deadline=time.monotonic() + 5.0
-                )
-            )
-        finally:
-            server.close()
-
-    def test_expired_deadline_gives_up_immediately(self) -> None:
-        started = time.monotonic()
-
-        self.assertFalse(
-            validator.wait_for_port("127.0.0.1", 1, deadline=time.monotonic() - 1.0)
-        )
-        self.assertLess(time.monotonic() - started, 1.0)
 
 
 class CommandLineTest(unittest.TestCase):

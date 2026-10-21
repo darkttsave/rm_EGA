@@ -7,6 +7,13 @@ data 的预期长度与字段布局全部来自 --spec 指定的 JSON 描述，P
 长度与字段名。MQTT payload 交给仓库既有的 sim/robomaster_pb2.py 解析，不手工
 解析 Protobuf wire format，也不复制第二份 CustomByteBlock 结构。
 
+MQTT 传输层（连接/订阅/超时/停止/计数）复用同包内的 ``receiver``，本模块只保留
+协议校验逻辑；pb2 加载复用 ``decoders.load_message_class``。
+
+运行方式（包内模块，必须用 ``-m``）：
+
+    python -m tools.mqtt_protocol.custom_byte_validator --help
+
 依赖（只在真正需要时才导入）：
 - paho-mqtt：连接 broker 时必需；
 - protobuf 运行时：解析 CustomByteBlock 时必需，版本须满足
@@ -17,7 +24,6 @@ data 的预期长度与字段布局全部来自 --spec 指定的 JSON 描述，P
 from __future__ import annotations
 
 import argparse
-import importlib
 import json
 import struct
 import sys
@@ -28,11 +34,18 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable, Sequence
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_SPEC_PATH = PROJECT_ROOT / "tools/protocol_specs/sentry_bt_status_v1.json"
-GENERATED_PB2_PATH = PROJECT_ROOT / "sim/robomaster_pb2.py"
-RELEASE_TOOL_DIR = PROJECT_ROOT / "tools/release"
-GENERATE_HINT = "python3 tools/release/generate_sim_protobuf.py"
+from . import decoders
+from .receiver import (
+    DEFAULT_LOOP_TIMEOUT,
+    MessageReceiver,
+    default_client_factory,
+    wait_for_port,
+)
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+DEFAULT_SPEC_PATH = (
+    PROJECT_ROOT / "tools/mqtt_protocol/protocol_specs/sentry_bt_status_v1.json"
+)
 
 STATUS_PASS = "PASS"
 STATUS_FAIL = "FAIL"
@@ -301,57 +314,19 @@ def parse_spec_mapping(
     )
 
 
-def required_protobuf_requirement(pb2_path: Path) -> str | None:
-    """复用仓库门禁推导 pb2 需要的 protobuf 版本范围，失败时返回 None。"""
-
-    inserted = str(RELEASE_TOOL_DIR) not in sys.path
-    if inserted:
-        sys.path.insert(0, str(RELEASE_TOOL_DIR))
-    try:
-        checker = importlib.import_module("check_sim_protobuf_runtime")
-        generated = checker.parse_generated_runtime(pb2_path)
-        return checker.expected_requirement(generated)
-    except Exception:
-        return None
-    finally:
-        if inserted:
-            try:
-                sys.path.remove(str(RELEASE_TOOL_DIR))
-            except ValueError:
-                pass
-
-
 def load_custom_byte_block(spec: ProtocolSpec):
-    """导入仓库既有的 sim/robomaster_pb2.py，返回 spec 指向的消息类。"""
-
-    if not GENERATED_PB2_PATH.is_file():
-        raise ValidatorError(
-            f"缺少生成的 Protobuf 模块：{GENERATED_PB2_PATH}\n"
-            f"请先运行： {GENERATE_HINT}"
-        )
-
-    sim_dir = str(GENERATED_PB2_PATH.parent)
-    if sim_dir not in sys.path:
-        sys.path.insert(0, sim_dir)
-    try:
-        module = importlib.import_module("robomaster_pb2")
-    except Exception as error:
-        requirement = required_protobuf_requirement(GENERATED_PB2_PATH)
-        advice = (
-            f"请安装与生成代码同主版本的 Protobuf 运行时： pip install '{requirement}'"
-            if requirement
-            else "请安装与生成代码同主版本的 Protobuf 运行时（protobuf>=6.33.2,<7）"
-        )
-        raise ValidatorError(
-            f"无法导入 {GENERATED_PB2_PATH}：{error}\n{advice}"
-        ) from error
+    """返回 spec 指向的消息类；pb2 加载统一走 decoders 层，不重复实现。"""
 
     package, _, short_name = spec.protobuf_message_type.rpartition(".")
-    message_class = getattr(module, short_name, None) if short_name else None
-    if message_class is None:
+    if not short_name:
         raise ValidatorError(
-            f"{GENERATED_PB2_PATH} 中不存在消息类型 {spec.protobuf_message_type}"
+            f"协议描述中的 protobuf_message_type 不合法：{spec.protobuf_message_type!r}"
         )
+
+    try:
+        message_class = decoders.load_message_class(short_name)
+    except decoders.DecoderError as error:
+        raise ValidatorError(str(error)) from error
 
     actual_name = message_class.DESCRIPTOR.full_name
     if actual_name != spec.protobuf_message_type:
@@ -629,42 +604,6 @@ class ValidationSession:
         return lines
 
 
-def wait_for_port(broker: str, port: int, *, deadline: float, interval: float = 0.5) -> bool:
-    """在 deadline 之前等待端口可达，避免为不可达的 broker 白等。"""
-
-    import socket
-
-    while True:
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            return False
-        try:
-            with socket.create_connection((broker, port), timeout=min(2.0, remaining)):
-                return True
-        except OSError:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                return False
-            time.sleep(min(interval, remaining))
-
-
-def default_client_factory(client_id: str):
-    """延迟导入 paho-mqtt 并创建客户端；未安装时给出明确提示。"""
-
-    try:
-        import paho.mqtt.client as mqtt
-    except ImportError as error:
-        raise ValidatorError(
-            "未安装 paho-mqtt，无法连接 broker；请运行： pip install 'paho-mqtt>=2.0'"
-        ) from error
-
-    return mqtt.Client(
-        mqtt.CallbackAPIVersion.VERSION2,
-        client_id=client_id,
-        protocol=mqtt.MQTTv311,
-    )
-
-
 def run_validator(
     args: argparse.Namespace,
     spec: ProtocolSpec,
@@ -673,58 +612,53 @@ def run_validator(
     *,
     client_factory: Callable[[str], object] = default_client_factory,
     clock: Callable[[], float] = time.monotonic,
-    loop_timeout: float = 0.1,
+    loop_timeout: float = DEFAULT_LOOP_TIMEOUT,
     deadline: float | None = None,
 ) -> int:
-    """连接、订阅并驱动事件循环；只订阅，绝不 publish。"""
+    """通过接收层订阅并驱动校验；只订阅，绝不 publish。
 
-    client = client_factory(args.client_id)
-    state = {"connected": False, "rc": None}
+    MQTT 传输细节（连接/订阅/超时/停止/计数）全部由 ``receiver.MessageReceiver``
+    负责，本函数只把消息交给校验会话。
+    """
 
-    def on_connect(active_client, userdata, flags, rc, properties=None):
-        rc_value = getattr(rc, "value", rc)
-        state["rc"] = rc_value
-        if rc_value == 0:
-            state["connected"] = True
-            active_client.subscribe(spec.mqtt_topic)
+    if deadline is None:
+        deadline = clock() + args.timeout
 
-    def on_message(active_client, userdata, message):
-        session.handle_message(
-            topic=message.topic, payload=message.payload, decode_data=decoder
-        )
-
-    client.on_connect = on_connect
-    client.on_message = on_message
-
-    deadline = clock() + args.timeout if deadline is None else deadline
-    try:
-        client.connect(args.broker, args.port, keepalive=30)
-    except Exception as error:
-        session.output(f"连接 {args.broker}:{args.port} 失败：{error}")
-        return EXIT_ERROR
-
-    while clock() < deadline and not state["connected"]:
-        client.loop(timeout=loop_timeout)
-
-    if not state["connected"]:
+    def on_connected(subscribed) -> None:
         session.output(
-            f"在 {args.timeout:.0f}s 内未完成 MQTT 握手（rc={state['rc']}）；"
-            "请确认 broker 与 client-id 可用。"
+            f"已连接 {args.broker}:{args.port}，已订阅 {', '.join(subscribed)}，"
+            f"client-id={args.client_id}（只订阅，不发布）"
         )
-        if hasattr(client, "disconnect"):
-            client.disconnect()
-        return EXIT_ERROR
 
-    session.output(
-        f"已连接 {args.broker}:{args.port}，已订阅 {spec.mqtt_topic}，"
-        f"client-id={args.client_id}（只订阅，不发布）"
+    receiver_ = MessageReceiver(
+        broker=args.broker,
+        port=args.port,
+        client_id=args.client_id,
+        topics=[spec.mqtt_topic],
+        client_factory=client_factory,
+        clock=clock,
+        loop_timeout=loop_timeout,
+    )
+    result = receiver_.run(
+        timeout=args.timeout,
+        handler=lambda envelope: session.handle_message(
+            topic=envelope.topic, payload=envelope.payload, decode_data=decoder
+        ),
+        should_stop=session.is_complete,
+        on_connected=on_connected,
+        deadline=deadline,
     )
 
-    while clock() < deadline and not session.is_complete():
-        client.loop(timeout=loop_timeout)
+    if result.connection_error is not None:
+        session.output(f"连接 {args.broker}:{args.port} 失败：{result.connection_error}")
+        return EXIT_ERROR
 
-    if hasattr(client, "disconnect"):
-        client.disconnect()
+    if not result.connected:
+        session.output(
+            f"在 {args.timeout:.0f}s 内未完成 MQTT 握手（rc={result.connect_rc}）；"
+            "请确认 broker 与 client-id 可用。"
+        )
+        return EXIT_ERROR
 
     for line in session.summary_lines():
         session.output(line)
