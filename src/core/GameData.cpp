@@ -4269,7 +4269,7 @@ void GameData::updatePenalty(const robomaster::PenaltyInfo &data) {
 
 //哨兵路径规划更新
 void GameData::updateSentryPath(const robomaster::RobotPathPlanInfo &data) {
-  // 排查用：路径起点按协议应等于哨兵当前位置，与 [RobotPosition] 日志对照即可判断。
+  // 排查用：路径起点按协议应等于哨兵当前位置，可与 RobotPosition 上报值对照。
   qDebug() << "[SentryPath] rx intention=" << data.intention() << "start=("
            << data.start_pos_x() << "," << data.start_pos_y()
            << ") dm, deltas=" << data.offset_x_size() << "/"
