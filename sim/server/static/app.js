@@ -520,6 +520,8 @@ if (!hasSocketIo || !hasVue) {
             { x: 148, y: 112 },
             { x: 192, y: 146 }
         ],
+        // 49 点测试路径的预览折线（协议要求 49 组增量，供渲染验证用）
+        robotPathPlanTestPolyline: [],
         pathPlanCanvas: null,
         pathPlanCtx: null,
         draggingPathPlanPoint: -1,
@@ -1687,10 +1689,15 @@ if (!hasSocketIo || !hasVue) {
             const offsetY = Array.isArray(info.offset_y) ? info.offset_y : [];
             const points = [this.pathPlanDmToCanvas(startX, startY)];
 
+            // 协议 0x0307：增量相较于上一个点位计算，当前点 = 上一个点 + 当前增量
+            let currentX = startX;
+            let currentY = startY;
             for (let i = 0; i < 3; i += 1) {
                 const dx = this.clampPathPlanOffset(offsetX[i] ?? 0);
                 const dy = this.clampPathPlanOffset(offsetY[i] ?? 0);
-                points.push(this.pathPlanDmToCanvas(startX + dx, startY + dy));
+                currentX += dx;
+                currentY += dy;
+                points.push(this.pathPlanDmToCanvas(currentX, currentY));
             }
 
             return points;
@@ -1712,10 +1719,13 @@ if (!hasSocketIo || !hasVue) {
             const startDm = this.pathPlanCanvasToDm(startPoint.x, startPoint.y);
             const offsetX = [];
             const offsetY = [];
+            // 协议 0x0307：增量相较于上一个点位，而不是相对起点
+            let previousDm = startDm;
             for (let i = 1; i < points.length; i += 1) {
                 const pointDm = this.pathPlanCanvasToDm(points[i].x, points[i].y);
-                offsetX.push(this.clampPathPlanOffset(pointDm.x - startDm.x));
-                offsetY.push(this.clampPathPlanOffset(pointDm.y - startDm.y));
+                offsetX.push(this.clampPathPlanOffset(pointDm.x - previousDm.x));
+                offsetY.push(this.clampPathPlanOffset(pointDm.y - previousDm.y));
+                previousDm = pointDm;
             }
 
             this.robotPathPlanForm = Object.assign({}, this.robotPathPlanForm, {
@@ -1767,6 +1777,59 @@ if (!hasSocketIo || !hasVue) {
                 offset_y: [...this.robotPathPlanForm.offset_y],
                 sender_id: this.clampPathPlanSenderId(this.robotPathPlanForm.sender_id)
             });
+        },
+        buildRobotPathPlanTest49() {
+            // 生成协议规定的 49 组增量：起点 (20,75)，X 从 20 铺到 260 dm，
+            // Y 走一个完整正弦（40~110 dm）。用于验证客户端在 49 点下的渲染连续性。
+            const steps = 49;
+            const startX = 20;
+            const startY = 75;
+            const spanX = 240;
+            const amplitude = 35;
+            const offsetX = [];
+            const offsetY = [];
+            let previousX = startX;
+            let previousY = startY;
+            for (let i = 1; i <= steps; i += 1) {
+                const t = i / steps;
+                const nextX = Math.round(startX + spanX * t);
+                const nextY = Math.round(startY + amplitude * Math.sin(t * Math.PI * 2));
+                offsetX.push(this.clampPathPlanOffset(nextX - previousX));
+                offsetY.push(this.clampPathPlanOffset(nextY - previousY));
+                previousX = nextX;
+                previousY = nextY;
+            }
+            return {
+                intention: this.clampPathPlanIntention(this.robotPathPlanForm.intention),
+                sender_id: this.clampPathPlanSenderId(this.robotPathPlanForm.sender_id),
+                start_pos_x: startX,
+                start_pos_y: startY,
+                offset_x: offsetX,
+                offset_y: offsetY
+            };
+        },
+        buildRobotPathPlanPolyline(info = {}) {
+            // 按协议"当前点 = 上一个点 + 当前增量"还原整条路径，长度不受 4 点拖拽限制。
+            const offsetX = Array.isArray(info.offset_x) ? info.offset_x : [];
+            const offsetY = Array.isArray(info.offset_y) ? info.offset_y : [];
+            let x = this.clampPathPlanDmX(info.start_pos_x ?? 0);
+            let y = this.clampPathPlanDmY(info.start_pos_y ?? 0);
+            const points = [this.pathPlanDmToCanvas(x, y)];
+            const count = Math.min(offsetX.length, offsetY.length);
+            for (let i = 0; i < count; i += 1) {
+                x = this.clampPathPlanDmX(x + Number(offsetX[i] || 0));
+                y = this.clampPathPlanDmY(y + Number(offsetY[i] || 0));
+                points.push(this.pathPlanDmToCanvas(x, y));
+            }
+            return points;
+        },
+        sendRobotPathPlanTest49() {
+            const plan = this.buildRobotPathPlanTest49();
+            // 先发送再画预览：避免渲染出错时把消息也一起吞掉
+            this.robotPathPlanDirty = true;
+            this.sendCommand('set_robot_path_plan', plan);
+            this.robotPathPlanTestPolyline = this.buildRobotPathPlanPolyline(plan);
+            this.drawRobotPathPlanCanvas();
         },
         sendRobotStaticStatus() {
             this.robotStaticStatusDirty = true;
@@ -2241,6 +2304,8 @@ if (!hasSocketIo || !hasVue) {
             });
             this.draggingPathPlanPoint = hitIndex;
             if (hitIndex !== -1) {
+                // 开始手动拖点时清掉 49 点测试预览，避免两条线混在一起
+                this.robotPathPlanTestPolyline = [];
                 this.markRobotPathPlanDirty();
                 this.isEditingRobotPathPlanForm = true;
             }
@@ -2307,6 +2372,24 @@ if (!hasSocketIo || !hasVue) {
                 ctx.moveTo(this.pathPlanPadding, y);
                 ctx.lineTo(w - this.pathPlanPadding, y);
                 ctx.stroke();
+            }
+
+            if (Array.isArray(this.robotPathPlanTestPolyline) && this.robotPathPlanTestPolyline.length > 1) {
+                // 49 点测试路径：虚线画整条，便于和客户端渲染对照
+                ctx.save();
+                ctx.strokeStyle = '#3ddc84';
+                ctx.lineWidth = 2;
+                ctx.setLineDash([6, 4]);
+                ctx.beginPath();
+                this.robotPathPlanTestPolyline.forEach((point, index) => {
+                    if (index === 0) {
+                        ctx.moveTo(point.x, point.y);
+                    } else {
+                        ctx.lineTo(point.x, point.y);
+                    }
+                });
+                ctx.stroke();
+                ctx.restore();
             }
 
             ctx.strokeStyle = '#67b3ff';

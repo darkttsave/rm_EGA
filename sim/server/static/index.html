@@ -9,7 +9,7 @@
     <script src="/vendor/socket.io.min.js" defer></script>
     <script src="/vendor/vue.min.js" defer></script>
     <script src="/map_geometry.js?v=20260809_01" defer></script>
-    <script src="/app.js?v=20260809_01" defer></script>
+    <script src="/app.js?v=20261022_01" defer></script>
 </head>
 
 <body>
@@ -908,6 +908,11 @@
                         </div>
                         <div class="actions">
                             <button @click="sendRobotPathPlan()">发送路径规划</button>
+                            <button @click="sendRobotPathPlanTest49()">发送 49 点测试路径</button>
+                        </div>
+                        <div class="path-plan-hint">
+                            49 点测试路径：起点 (20,75)，X 铺到 260dm，Y 走一个正弦（40~110dm），
+                            用于验证客户端在协议规定的 49 组增量下的渲染；发送后以绿色虚线显示。
                         </div>
                     </div>
 
