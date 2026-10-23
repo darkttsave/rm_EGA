@@ -2581,7 +2581,8 @@ void MainWindow::createCenterArea() {
       qWarning() << "  " << error.toString();
     }
   }
-  m_miniMap->setFixedSize(270, 160);
+  // 与小地图 QML 的设计基准一致：280×150，与场地 280dm×150dm 等比
+  m_miniMap->setFixedSize(280, 150);
   m_miniMap->setFocusPolicy(Qt::StrongFocus);
   m_miniMap->setFocus();
   rightBottomLayout->addWidget(m_miniMap, 0, Qt::AlignRight);
@@ -2609,7 +2610,7 @@ void MainWindow::createCenterArea() {
       qWarning() << "  " << error.toString();
     }
   }
-  m_miniMapLarge->setFixedSize(810, 480); // 放大显示，保持原始比例
+  m_miniMapLarge->setFixedSize(840, 450); // 放大显示，×3 保持 280:150 等比
   m_miniMapLarge->setFocusPolicy(Qt::StrongFocus);
   m_miniMapLarge->setFocus();
   m_miniMapLarge->hide();
@@ -5815,11 +5816,13 @@ void MainWindow::applyPanelResolutionScaling() {
   }
 
   if (m_miniMap) {
-    m_miniMap->setFixedSize(getScaledPanelSize(270, 160));
+    // 280×150：与场地等比，避免横向压扁导致路径形状失真
+    m_miniMap->setFixedSize(getScaledPanelSize(280, 150));
   }
 
   if (m_miniMapLarge) {
-    m_miniMapLarge->setFixedSize(getScaledPanelSize(675, 400));
+    // 672×360 = 280×150 × 2.4，保持等比
+    m_miniMapLarge->setFixedSize(getScaledPanelSize(672, 360));
   }
 
   if (m_heroVideoWidget) {

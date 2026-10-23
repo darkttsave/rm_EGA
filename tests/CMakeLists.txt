@@ -167,6 +167,20 @@ target_link_libraries(test_config_manager_video PRIVATE
     Qt6::Core Qt6::Test RoboMasterClientLib)
 rm26_add_qt_test(TestConfigManagerVideo test_config_manager_video)
 
+# 哨兵路径坐标转换回归测试（+1 与负增量、累计点、像素位置）
+add_executable(test_sentry_path_render unit/test_sentry_path_render.cpp)
+target_link_libraries(test_sentry_path_render PRIVATE
+    Qt6::Core Qt6::Test RoboMasterClientLib protobuf::libprotobuf)
+rm26_add_qt_test(TestSentryPathRender test_sentry_path_render)
+
+# 小地图归一化→像素映射回归测试（协议 0x0307：等比缩放 + 边界钳制 + Y 向上）
+add_executable(test_minimap_path_mapping unit/test_minimap_path_mapping.cpp)
+target_link_libraries(test_minimap_path_mapping PRIVATE
+    Qt6::Core Qt6::Qml Qt6::Quick Qt6::Test RoboMasterClientLib)
+rm26_add_qt_test(TestMinimapPathMapping test_minimap_path_mapping)
+set_property(TEST TestMinimapPathMapping APPEND PROPERTY ENVIRONMENT
+    "QT_QPA_PLATFORM=offscreen")
+
 # 性能基准测试
 add_executable(test_benchmark benchmark/test_benchmark.cpp)
 target_link_libraries(test_benchmark PRIVATE Qt6::Core Qt6::Test RoboMasterClientLib protobuf::libprotobuf)

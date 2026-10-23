@@ -12,8 +12,9 @@ import QtQuick 2.15
 
 Item {
     id: root
-    width: 270
-    height: 160
+    // 设计基准与场地等比：280 dm × 150 dm（官方协议 0x0307 要求"按场地尺寸与小地图尺寸等比缩放"）
+    width: 280
+    height: 150
 
     // gameData 由 MainWindow 注入，小地图统一从这里读取比赛状态。
     // qmllint disable unqualified
@@ -50,6 +51,19 @@ Item {
     property real sentryStartY: gameDataContext ? gameDataContext.sentryStartY : 0.55
     property var sentryPathDeltasX: gameDataContext ? gameDataContext.sentryPathDeltasX : [-0.4, 0.4, -0.5, -0.05]
     property var sentryPathDeltasY: gameDataContext ? gameDataContext.sentryPathDeltasY : [0.15, -0.4, 0.3, -0.15]
+
+    /// 把归一化坐标钳制到 [0,1]；用于"超出边界的位置在边界处显示"。
+    function clampUnit(value) {
+        return Math.max(0.0, Math.min(1.0, value));
+    }
+
+    /// 归一化坐标 → 画布像素。
+    /// 官方协议 0x0307：小地图左下角为原点，X 向右、Y 向上；按场地与小地图尺寸等比缩放，
+    /// 越界点显示在边界处。等比由 root 的 280×150 设计基准保证。
+    function pathPointToCanvas(nx, ny) {
+        return Qt.point(clampUnit(nx) * root.width,
+                        (1.0 - clampUnit(ny)) * root.height);
+    }
 
     // --- 信号 ---
     signal mapClicked(real x, real y)            // 地图点击信号（归一化坐标）
@@ -371,19 +385,44 @@ Item {
 
             var startX = root.sentryStartX;
             var startY = root.sentryStartY;
-            ctx.moveTo(startX * root.width, (1 - startY) * root.height);
+            var startPoint = root.pathPointToCanvas(startX, startY);
+            ctx.moveTo(startPoint.x, startPoint.y);
             var addX = startX;
             var addY = startY;
 
             for (var i = 0; i < root.sentryPathDeltasX.length; i++) {
+                // 官方协议 0x0307：增量相较于上一个点位计算
                 addX += root.sentryPathDeltasX[i];
                 addY += root.sentryPathDeltasY[i];
-                var pointX = addX * root.width;
-                var pointY = (1 - addY) * root.height;
-                ctx.lineTo(pointX, pointY);
+                // 超出边界的位置在边界处显示（钳制只作用于绘制，不改累加值）
+                var point = root.pathPointToCanvas(addX, addY);
+                ctx.lineTo(point.x, point.y);
             }
 
             ctx.stroke();
+
+            // 起点/终点标记：全部自绘，不使用任何官方素材。
+            // 尺寸用固定像素（与路径线宽同一量级）：标记若随画布放大，短路径会被整段盖住。
+            var startMarker = root.pathPointToCanvas(startX, startY);
+            var endMarker = root.pathPointToCanvas(addX, addY);
+
+            // 起点：空心圆环，便于核对"路径起点是否落在哨兵图标上"
+            ctx.beginPath();
+            ctx.strokeStyle = "#00FF00";
+            ctx.lineWidth = 1.5;
+            ctx.arc(startMarker.x, startMarker.y, 3.0, 0, Math.PI * 2);
+            ctx.stroke();
+
+            // 终点：实心菱形
+            var halfDiagonal = 3.5;
+            ctx.beginPath();
+            ctx.moveTo(endMarker.x, endMarker.y - halfDiagonal);
+            ctx.lineTo(endMarker.x + halfDiagonal, endMarker.y);
+            ctx.lineTo(endMarker.x, endMarker.y + halfDiagonal);
+            ctx.lineTo(endMarker.x - halfDiagonal, endMarker.y);
+            ctx.closePath();
+            ctx.fillStyle = "#00FF00";
+            ctx.fill();
         }
 
         onWidthChanged: requestPaint()
@@ -414,16 +453,16 @@ Item {
         x: 0.4 * root.width - width / 2
         y: 0.75 * root.height - height / 2
         opacity: root.redOutpostDead ? 0.5 : 1.0
-        width: sourceSize.width * 0.38 * root.width / 270.0
-        height: sourceSize.height * 0.38 * root.height / 160.0
+        width: sourceSize.width * 0.38 * root.width / 280.0
+        height: sourceSize.height * 0.38 * root.height / 150.0
     }
     Image {
         source: "qrc:/images/minimap/blue_map_outpost.png"
         x: 0.608 * root.width - width / 2
         y: 0.24 * root.height - height / 2
         opacity: root.blueOutpostDead ? 0.5 : 1.0
-        width: sourceSize.width * 0.38 * root.width / 270.0
-        height: sourceSize.height * 0.38 * root.height / 160.0
+        width: sourceSize.width * 0.38 * root.width / 280.0
+        height: sourceSize.height * 0.38 * root.height / 150.0
     }
 
     // 基地动画锚点（用于受击动画定位）
@@ -431,16 +470,16 @@ Item {
         id: redBaseIcon
         x: root.relativeRedX * root.width - width / 5
         y: 0.5 * root.height - height / 2
-        width: 24 * root.width / 270.0
-        height: 24 * root.height / 160.0
+        width: 24 * root.width / 280.0
+        height: 24 * root.height / 150.0
         visible: false
     }
     Item {
         id: blueBaseIcon
         x: root.relativeBlueX * root.width - width / 1.1
         y: 0.5 * root.height - height / 2
-        width: 24 * root.width / 270.0
-        height: 24 * root.height / 160.0
+        width: 24 * root.width / 280.0
+        height: 24 * root.height / 150.0
         visible: false
     }
 
@@ -457,8 +496,8 @@ Item {
             //四层图片不同的大小
             property real animationScale: 1.0 + (redBaseAnimation.modelData - 1) * 0.1 + (redBaseAnimation.modelData === 1 ? 0 : 0.1)
             //breathFactor控制呼吸效果
-            width: sourceSize.width * root.scaleFactor * root.breathFactor * redBaseAnimation.animationScale * root.width / 270.0
-            height: sourceSize.height * root.scaleFactor * root.breathFactor * redBaseAnimation.animationScale * root.height / 160.0
+            width: sourceSize.width * root.scaleFactor * root.breathFactor * redBaseAnimation.animationScale * root.width / 280.0
+            height: sourceSize.height * root.scaleFactor * root.breathFactor * redBaseAnimation.animationScale * root.height / 150.0
         }
     }
 
@@ -472,8 +511,8 @@ Item {
             source: "qrc:/images/minimap/blue_map_base_animation_" + blueBaseAnimation.modelData + ".png"
             anchors.centerIn: blueBaseIcon
             property real animationScale: 1.0 + (blueBaseAnimation.modelData - 1) * 0.1 + (blueBaseAnimation.modelData === 1 ? 0 : 0.1)
-            width: sourceSize.width * root.scaleFactor * root.breathFactor * blueBaseAnimation.animationScale * root.width / 270.0
-            height: sourceSize.height * root.scaleFactor * root.breathFactor * blueBaseAnimation.animationScale * root.height / 160.0
+            width: sourceSize.width * root.scaleFactor * root.breathFactor * blueBaseAnimation.animationScale * root.width / 280.0
+            height: sourceSize.height * root.scaleFactor * root.breathFactor * blueBaseAnimation.animationScale * root.height / 150.0
         }
     }
 
@@ -508,7 +547,9 @@ Item {
                 return Math.max(0.0, Math.min(1.0, v));
             }
             x: robotMarker.normalizedPosX * root.width
-            y: robotMarker.normalizedPosY * root.height //坐标中心是左上角，比赛显示来看
+            // 场地坐标 Y 向上（协议 0x0307：小地图左下角为原点），与哨兵路径、战术地图一致；
+            // 旧实现用 y = posY * height（左上角原点），导致机器人图标与路径上下镜像。
+            y: (1.0 - robotMarker.normalizedPosY) * root.height
             z: 2
             opacity: robotMarker.isDead ? 0.5 : 1.0
 
@@ -518,8 +559,8 @@ Item {
                 visible: robotMarker.isHighLight
                 source: "qrc:/images/minimap/map_robot_lockline.png"
                 anchors.centerIn: parent
-                width: sourceSize.width * root.scaleFactor * root.breathFactor * 0.75 * root.width / 270.0
-                height: sourceSize.height * root.scaleFactor * root.breathFactor * 0.75 * root.height / 160.0
+                width: sourceSize.width * root.scaleFactor * root.breathFactor * 0.75 * root.width / 280.0
+                height: sourceSize.height * root.scaleFactor * root.breathFactor * 0.75 * root.height / 150.0
             }
 
             // 机器人底座图标
@@ -540,8 +581,8 @@ Item {
                 anchors.centerIn: parent
                 //被锁定时机器人有呼吸效果
                 property real robotScale: robotMarker.isHighLight ? root.scaleFactor * 4.0 / 7.0 * root.breathFactor : root.scaleFactor * 4.0 / 3.5
-                width: sourceSize.width * robotBaseImage.robotScale * root.width / 270.0
-                height: sourceSize.height * robotBaseImage.robotScale * root.height / 160.0
+                width: sourceSize.width * robotBaseImage.robotScale * root.width / 280.0
+                height: sourceSize.height * robotBaseImage.robotScale * root.height / 150.0
             }
 
             // 方向箭头
@@ -559,15 +600,15 @@ Item {
                 anchors.centerIn: parent
                 rotation: robotMarker.angle
                 property real arrowScale: robotMarker.isHighLight ? root.breathFactor : 1.0
-                width: sourceSize.width * root.scaleFactor * directionArrow.arrowScale * root.width / 270.0
-                height: sourceSize.height * root.scaleFactor * directionArrow.arrowScale * root.height / 160.0
+                width: sourceSize.width * root.scaleFactor * directionArrow.arrowScale * root.width / 280.0
+                height: sourceSize.height * root.scaleFactor * directionArrow.arrowScale * root.height / 150.0
                 //方向箭头需要根据机器人方向调整位置
                 transform: Translate {
                     id: arrowOffset
 
                     property real arrowScale: robotMarker.isHighLight ? root.breathFactor : 1.0
-                    x: Math.sin(robotMarker.angle / 180.0 * Math.PI) * 10 ** arrowOffset.arrowScale * root.width / 270.0
-                    y: -Math.cos(robotMarker.angle / 180.0 * Math.PI) * 10 ** arrowOffset.arrowScale * root.height / 160.0
+                    x: Math.sin(robotMarker.angle / 180.0 * Math.PI) * 10 ** arrowOffset.arrowScale * root.width / 280.0
+                    y: -Math.cos(robotMarker.angle / 180.0 * Math.PI) * 10 ** arrowOffset.arrowScale * root.height / 150.0
                 }
             }
 
@@ -605,8 +646,8 @@ Item {
                 }
                 anchors.centerIn: parent
                 property real idScale: robotMarker.isHighLight ? root.breathFactor : 1.0
-                width: sourceSize.width * root.scaleFactor * robotIdImage.idScale * root.width / 270.0
-                height: sourceSize.height * root.scaleFactor * robotIdImage.idScale * root.height / 160.0
+                width: sourceSize.width * root.scaleFactor * robotIdImage.idScale * root.width / 280.0
+                height: sourceSize.height * root.scaleFactor * robotIdImage.idScale * root.height / 150.0
             }
         }
     }
@@ -658,8 +699,8 @@ Item {
             Image {
                 anchors.centerIn: parent
                 source: root.markerSource(commandMarker.markType)
-                width: 18 * root.width / 270.0
-                height: 18 * root.height / 160.0
+                width: 18 * root.width / 280.0
+                height: 18 * root.height / 150.0
                 smooth: true
                 opacity: parent.opacity
             }
@@ -668,8 +709,8 @@ Item {
 
     // 4. 能量机关
     Rectangle {
-        width: 30 * root.width / 270.0
-        height: 30 * root.height / 160.0
+        width: 30 * root.width / 280.0
+        height: 30 * root.height / 150.0
         color: "transparent"
         anchors.centerIn: parent
         Image {

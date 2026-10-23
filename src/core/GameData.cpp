@@ -4269,39 +4269,40 @@ void GameData::updatePenalty(const robomaster::PenaltyInfo &data) {
 
 //哨兵路径规划更新
 void GameData::updateSentryPath(const robomaster::RobotPathPlanInfo &data) {
-  //归一化处理（可更改场地信息）
+  // 排查用：路径起点按协议应等于哨兵当前位置，与 [RobotPosition] 日志对照即可判断。
+  qDebug() << "[SentryPath] rx intention=" << data.intention() << "start=("
+           << data.start_pos_x() << "," << data.start_pos_y()
+           << ") dm, deltas=" << data.offset_x_size() << "/"
+           << data.offset_y_size();
+
+  // 场地尺寸（分米），与通信协议一致；仅用于把分米换算成归一化坐标。
   constexpr float kMapWidthDm = 280.0f;
   constexpr float kMapHeightDm = 150.0f;
 
-  auto normalizeCoord = [](qreal value, qreal maxMeters) -> qreal {
-    qreal normalized = value;
-    // 兼容两种输入：已经是归一化(0~1) 或 以分米为单位(0~地图尺寸)
-    if (normalized > 1.0 || normalized < 0.0) {
-      normalized = (maxMeters > 0.0) ? (normalized / maxMeters) : 0.0;
-    }
-    if (normalized < 0.0)
-      normalized = 0.0;
-    if (normalized > 1.0)
-      normalized = 1.0;
-    return normalized;
-  };
-
-
+  // 起点：按地图尺寸换算。保留现有坐标轴方向（左下角为原点），
+  // 不做 0~1 裁剪，避免改变起点位置。
   m_allySentryPath.startX =
-      normalizeCoord(static_cast<float>(data.start_pos_x()), kMapWidthDm);
+      static_cast<float>(data.start_pos_x()) / kMapWidthDm;
   m_allySentryPath.startY =
-      normalizeCoord(static_cast<float>(data.start_pos_y()), kMapHeightDm);
+      static_cast<float>(data.start_pos_y()) / kMapHeightDm;
 
+  // 增量：有符号，逐个除以对应尺寸后原样保留。
+  // 这里**不能**对单个增量做 0~1 归一化或裁剪：
+  //   - 值为 +1 的增量会被误当成“归一化坐标 1.0”，一步跨越整张地图；
+  //   - 负增量会被截成 0，导致回退路径丢失。
+  // 逐点累加与像素换算由 QML 负责（MiniMap.qml 的 sentryPathCanvas）。
   m_allySentryPath.pathDeltasX.clear();
+  m_allySentryPath.pathDeltasX.reserve(data.offset_x_size());
   for (int i = 0; i < data.offset_x_size(); ++i) {
     m_allySentryPath.pathDeltasX.append(
-      normalizeCoord(static_cast<float>(data.offset_x(i)), kMapWidthDm));
+        static_cast<float>(data.offset_x(i)) / kMapWidthDm);
   }
 
   m_allySentryPath.pathDeltasY.clear();
+  m_allySentryPath.pathDeltasY.reserve(data.offset_y_size());
   for (int i = 0; i < data.offset_y_size(); ++i) {
     m_allySentryPath.pathDeltasY.append(
-        normalizeCoord(static_cast<float>(data.offset_y(i)),kMapHeightDm));
+        static_cast<float>(data.offset_y(i)) / kMapHeightDm);
   }
   emit sentryPathUpdated();
 }
