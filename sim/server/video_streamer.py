@@ -303,18 +303,22 @@ class VideoStreamer:
 
                 if not data:
                     for frame in self.frame_extractor.flush():
-                        self._send_frame(frame)
+                        self.send_frame(frame)
                     self._log("FFmpeg 输出结束，重启...")
                     self._stop_ffmpeg()
                     continue
 
                 for frame in self.frame_extractor.push(data):
-                    self._send_frame(frame)
+                    self.send_frame(frame)
 
             except Exception as e:
                 self._log(f"推流错误: {e}")
                 self._stop_ffmpeg()
                 time.sleep(1)
+
+    def send_frame(self, data):
+        """发送一个完整 HEVC 访问单元，供文件推流和外部桥接共同复用。"""
+        self._send_frame(data)
 
     def _send_frame(self, data):
         """
