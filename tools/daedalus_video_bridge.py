@@ -31,6 +31,7 @@ def build_ffmpeg_command(
     width: int,
     height: int,
     fps: float,
+    frame_threads: int = 1,
 ) -> list[str]:
     """Build the bounded-latency RGB24-to-HEVC Annex-B encoder command."""
     return [
@@ -58,7 +59,12 @@ def build_ffmpeg_command(
         "-pix_fmt",
         "yuv420p",
         "-x265-params",
-        "keyint=15:min-keyint=15:scenecut=0:repeat-headers=1",
+        (
+            "keyint=15:min-keyint=15:scenecut=0:repeat-headers=1:"
+            f"frame-threads={frame_threads}"
+        ),
+        "-flush_packets",
+        "1",
         "-f",
         "hevc",
         "pipe:1",
@@ -101,31 +107,99 @@ def terminate_owned(process: Optional[subprocess.Popen[bytes]]) -> None:
         process.wait(timeout=2)
 
 
+class BridgeStats:
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._started = time.monotonic()
+        self._read_frames = 0
+        self._fed_frames = 0
+        self._stdin_write_ns = 0
+        self._stdin_write_max_ns = 0
+        self._encoded_frames = 0
+        self._encoded_bytes = 0
+
+    def record_read(self) -> None:
+        with self._lock:
+            self._read_frames += 1
+
+    def record_fed(self, write_ns: int) -> None:
+        with self._lock:
+            self._fed_frames += 1
+            self._stdin_write_ns += write_ns
+            self._stdin_write_max_ns = max(self._stdin_write_max_ns, write_ns)
+
+    def record_encoded(self, size: int) -> None:
+        with self._lock:
+            self._encoded_frames += 1
+            self._encoded_bytes += size
+
+    def snapshot_and_reset(self) -> dict[str, float]:
+        with self._lock:
+            now = time.monotonic()
+            elapsed = max(now - self._started, 1e-9)
+            values = {
+                "elapsed": elapsed,
+                "read_frames": float(self._read_frames),
+                "fed_frames": float(self._fed_frames),
+                "write_ns": float(self._stdin_write_ns),
+                "write_max_ns": float(self._stdin_write_max_ns),
+                "encoded_frames": float(self._encoded_frames),
+                "encoded_bytes": float(self._encoded_bytes),
+            }
+            self._started = now
+            self._read_frames = 0
+            self._fed_frames = 0
+            self._stdin_write_ns = 0
+            self._stdin_write_max_ns = 0
+            self._encoded_frames = 0
+            self._encoded_bytes = 0
+            return values
+
+
+def report_bridge_stats(
+    stats: BridgeStats,
+    stop: threading.Event,
+    target_fps: float,
+) -> None:
+    while not stop.wait(5.0):
+        values = stats.snapshot_and_reset()
+        elapsed = values["elapsed"]
+        fed_frames = values["fed_frames"]
+        encoded_fps = values["encoded_frames"] / elapsed
+        write_avg_ms = (
+            values["write_ns"] / fed_frames / 1_000_000.0 if fed_frames else 0.0
+        )
+        encoded_mbps = values["encoded_bytes"] * 8.0 / elapsed / 1_000_000.0
+        print(
+            "bridge: "
+            f"rgb_read_fps={values['read_frames'] / elapsed:.2f} "
+            f"ffmpeg_input_fps={fed_frames / elapsed:.2f} "
+            f"encoded_fps={encoded_fps:.2f} "
+            f"encoder_speed={encoded_fps / target_fps:.2f}x "
+            f"stdin_write_avg_ms={write_avg_ms:.2f} "
+            f"stdin_write_max_ms={values['write_max_ns'] / 1_000_000.0:.2f} "
+            f"encoded_mbps={encoded_mbps:.2f}",
+            file=sys.stderr,
+        )
+
+
 def pump_rgb_frames(
     reader_stdout: BinaryIO,
     encoder_stdin: BinaryIO,
     frame_size: int,
     stop: threading.Event,
     errors: list[BaseException],
+    stats: BridgeStats,
 ) -> None:
-    frame_count = 0
-    report_started = time.monotonic()
     try:
         while not stop.is_set():
             frame = read_exact(reader_stdout, frame_size)
             if frame is None:
                 break
+            stats.record_read()
+            write_started = time.perf_counter_ns()
             write_all(encoder_stdin, frame)
-            frame_count += 1
-            now = time.monotonic()
-            if now - report_started >= 5.0:
-                rate = frame_count / (now - report_started)
-                print(
-                    f"bridge: fed {frame_count} RGB frames ({rate:.1f} fps)",
-                    file=sys.stderr,
-                )
-                frame_count = 0
-                report_started = now
+            stats.record_fed(time.perf_counter_ns() - write_started)
     except (BrokenPipeError, EOFError, OSError) as error:
         if not stop.is_set():
             errors.append(error)
@@ -154,10 +228,16 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser.add_argument("--width", type=int, default=DEFAULT_WIDTH)
     parser.add_argument("--height", type=int, default=DEFAULT_HEIGHT)
     parser.add_argument("--fps", type=float, default=DEFAULT_FPS)
-    parser.add_argument("--reader-queue", type=int, choices=(1, 2), default=2)
+    parser.add_argument("--reader-queue", type=int, choices=(1, 2), default=1)
+    parser.add_argument("--x265-frame-threads", type=int, default=1)
     args = parser.parse_args(argv)
-    if args.width <= 0 or args.height <= 0 or args.fps <= 0:
-        parser.error("width, height and fps must be positive")
+    if (
+        args.width <= 0
+        or args.height <= 0
+        or args.fps <= 0
+        or args.x265_frame_threads <= 0
+    ):
+        parser.error("width, height, fps and x265 frame threads must be positive")
     return args
 
 
@@ -166,9 +246,11 @@ def run(args: argparse.Namespace) -> int:
     reader: Optional[subprocess.Popen[bytes]] = None
     encoder: Optional[subprocess.Popen[bytes]] = None
     pump_thread: Optional[threading.Thread] = None
+    reporter_thread: Optional[threading.Thread] = None
     sender: Optional[VideoStreamer] = None
     stop = threading.Event()
     pump_errors: list[BaseException] = []
+    stats = BridgeStats()
     interrupted = False
 
     try:
@@ -185,7 +267,13 @@ def run(args: argparse.Namespace) -> int:
             bufsize=0,
         )
         encoder = subprocess.Popen(
-            build_ffmpeg_command(args.ffmpeg, args.width, args.height, args.fps),
+            build_ffmpeg_command(
+                args.ffmpeg,
+                args.width,
+                args.height,
+                args.fps,
+                args.x265_frame_threads,
+            ),
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=None,
@@ -198,10 +286,16 @@ def run(args: argparse.Namespace) -> int:
         sender.frame_extractor.reset()
         pump_thread = threading.Thread(
             target=pump_rgb_frames,
-            args=(reader.stdout, encoder.stdin, frame_size, stop, pump_errors),
+            args=(reader.stdout, encoder.stdin, frame_size, stop, pump_errors, stats),
             name="talos-rgb-pump",
         )
         pump_thread.start()
+        reporter_thread = threading.Thread(
+            target=report_bridge_stats,
+            args=(stats, stop, args.fps),
+            name="video-bridge-stats",
+        )
+        reporter_thread.start()
 
         print(
             f"bridge: RGB24 {args.width}x{args.height}@{args.fps:g} -> "
@@ -213,9 +307,11 @@ def run(args: argparse.Namespace) -> int:
             if not chunk:
                 break
             for access_unit in sender.frame_extractor.push(chunk):
+                stats.record_encoded(len(access_unit))
                 sender.send_frame(access_unit)
 
         for access_unit in sender.frame_extractor.flush():
+            stats.record_encoded(len(access_unit))
             sender.send_frame(access_unit)
 
         if pump_thread is not None:
@@ -241,6 +337,8 @@ def run(args: argparse.Namespace) -> int:
         terminate_owned(encoder)
         if pump_thread is not None:
             pump_thread.join(timeout=2)
+        if reporter_thread is not None:
+            reporter_thread.join(timeout=2)
         if sender is not None:
             sender.stop()
 

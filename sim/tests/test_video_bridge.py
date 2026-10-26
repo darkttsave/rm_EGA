@@ -16,7 +16,7 @@ for path in (PROJECT_ROOT, SIM_ROOT):
 
 from server.hevc_annexb import HevcAnnexBFrameExtractor
 from server.video_streamer import VideoStreamer
-from tools.daedalus_video_bridge import build_ffmpeg_command, read_exact
+from tools.daedalus_video_bridge import build_ffmpeg_command, parse_args, read_exact
 
 
 class ShortReader:
@@ -63,8 +63,17 @@ class VideoBridgeTest(unittest.TestCase):
         self.assertIn("-preset ultrafast", joined)
         self.assertIn("-tune zerolatency", joined)
         self.assertIn("-pix_fmt yuv420p", joined)
-        self.assertIn("keyint=15:min-keyint=15:scenecut=0:repeat-headers=1", joined)
+        self.assertIn(
+            "keyint=15:min-keyint=15:scenecut=0:repeat-headers=1:frame-threads=1",
+            joined,
+        )
+        self.assertIn("-flush_packets 1", joined)
         self.assertEqual(["-f", "hevc", "pipe:1"], command[-3:])
+
+    def test_low_latency_defaults_use_one_frame_queue_and_encoder_thread(self):
+        args = parse_args([])
+        self.assertEqual(1, args.reader_queue)
+        self.assertEqual(1, args.x265_frame_threads)
 
     def test_annex_b_access_units_survive_arbitrary_chunks(self):
         stream = nal(32) + nal(33) + nal(34) + nal(19, True) + nal(1, True)
