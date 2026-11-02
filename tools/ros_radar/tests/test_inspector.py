@@ -37,6 +37,7 @@ class InspectorTests(unittest.TestCase):
         )
 
         output = stream.getvalue()
+        self.assertEqual(output.count("已收到首帧消息，开始解析"), 1)
         self.assertIn("disappeared=[(0, 1)]", output)
         self.assertIn("rate=2.00Hz", output)
         self.assertEqual(inspector.stats.valid, 2)

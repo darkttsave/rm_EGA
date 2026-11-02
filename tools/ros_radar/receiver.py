@@ -9,6 +9,7 @@ from typing import Callable
 
 DEFAULT_TOPIC = "/robot_map_positions"
 DEFAULT_NODE_NAME = "ros_radar_inspector"
+MESSAGE_TYPE_NAME = "vision_interface/msg/RobotMapPositions"
 QOS_DEPTH = 10
 
 
@@ -28,6 +29,7 @@ class ReceiveResult:
     received: int
     elapsed: float
     stopped_by_limit: bool
+    stopped_by_shutdown: bool = False
 
     @property
     def frequency_hz(self) -> float:
@@ -79,6 +81,7 @@ class RadarReceiver:
         handler: Callable[[MessageEnvelope], None],
         timeout: float | None = None,
         max_messages: int | None = None,
+        on_started: Callable[[], None] | None = None,
     ) -> ReceiveResult:
         if timeout is not None and timeout <= 0:
             raise ReceiverError("timeout 必须大于 0")
@@ -97,10 +100,10 @@ class RadarReceiver:
         started = self._clock()
         received = 0
         stopped_by_limit = False
-        initialized_here = not rclpy.ok()
-        if initialized_here:
-            rclpy.init(args=None)
-        node = rclpy.create_node(self.node_name)
+        stopped_by_shutdown = False
+        initialized_here = False
+        node = None
+        subscription = None
 
         def callback(message: object) -> None:
             nonlocal received
@@ -113,9 +116,17 @@ class RadarReceiver:
                 )
             )
 
-        subscription = node.create_subscription(message_type, self.topic, callback, qos)
-        del subscription  # node 持有订阅；保留语义，不在接收层解析。
         try:
+            initialized_here = not rclpy.ok()
+            if initialized_here:
+                rclpy.init(args=None)
+            node = rclpy.create_node(self.node_name)
+            subscription = node.create_subscription(
+                message_type, self.topic, callback, qos
+            )
+            if on_started is not None:
+                on_started()
+
             while rclpy.ok():
                 elapsed = self._clock() - started
                 if timeout is not None and elapsed >= timeout:
@@ -125,9 +136,19 @@ class RadarReceiver:
                     break
                 remaining = None if timeout is None else max(0.0, timeout - elapsed)
                 spin_timeout = 0.1 if remaining is None else min(0.1, remaining)
-                rclpy.spin_once(node, timeout_sec=spin_timeout)
+                try:
+                    rclpy.spin_once(node, timeout_sec=spin_timeout)
+                except KeyboardInterrupt:
+                    stopped_by_shutdown = True
+                    break
+
+            if not rclpy.ok() and not stopped_by_limit:
+                stopped_by_shutdown = True
         finally:
-            node.destroy_node()
+            # 保持 subscription 的强引用到 spin 结束；node 同时持有该订阅。
+            subscription = None
+            if node is not None:
+                node.destroy_node()
             if initialized_here and rclpy.ok():
                 rclpy.shutdown()
 
@@ -135,4 +156,5 @@ class RadarReceiver:
             received=received,
             elapsed=self._clock() - started,
             stopped_by_limit=stopped_by_limit,
+            stopped_by_shutdown=stopped_by_shutdown,
         )

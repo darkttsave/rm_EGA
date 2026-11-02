@@ -189,5 +189,5 @@ id_ecdsa
 credentials.json
 
 # AI 协作的临时输入与输出目录仅供本地使用
-/docs/ai_temporary/
-/docs/ai_output/
+/ai_workplace
+/output

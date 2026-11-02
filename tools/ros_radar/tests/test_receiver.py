@@ -74,6 +74,7 @@ class ReceiverTests(unittest.TestCase):
 
         times = iter([0.0, 0.0, 0.25, 0.5, 1.0])
         envelopes = []
+        started = []
         fixed_time = datetime(2026, 11, 2, tzinfo=timezone.utc)
         dependencies = (
             FakeRclpy,
@@ -86,7 +87,12 @@ class ReceiverTests(unittest.TestCase):
         with mock.patch.object(receiver, "load_ros_dependencies", return_value=dependencies):
             result = receiver.RadarReceiver(
                 clock=lambda: next(times), wall_clock=lambda: fixed_time
-            ).run(handler=envelopes.append, timeout=2.0, max_messages=1)
+            ).run(
+                handler=envelopes.append,
+                timeout=2.0,
+                max_messages=1,
+                on_started=lambda: started.append(True),
+            )
 
         self.assertEqual(node.subscription_args[0], "RobotMapPositions")
         self.assertEqual(node.subscription_args[1], receiver.DEFAULT_TOPIC)
@@ -96,6 +102,7 @@ class ReceiverTests(unittest.TestCase):
         )
         self.assertEqual(envelopes[0].message, "message")
         self.assertEqual(envelopes[0].received_at, fixed_time)
+        self.assertEqual(started, [True])
         self.assertEqual(result.received, 1)
         self.assertTrue(result.stopped_by_limit)
         self.assertTrue(node.destroyed)
