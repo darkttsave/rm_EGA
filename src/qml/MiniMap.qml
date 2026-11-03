@@ -43,8 +43,34 @@ Item {
     property real autoRotation: 0.0              // 自动旋转角度
     readonly property real breathFactor: 1.0 + 0.2 * Math.sin(breathPhase) // 呼吸缩放系数
     readonly property real scaleFactor: 1.0 / 3.0 // 基础缩放比例
+    readonly property real trainingRobotScale: 0.7 // 训练场机器人视觉缩放；比赛地图保持 1.0
     readonly property real relativeRedX: 0.06    // 红方基地相对X坐标
     readonly property real relativeBlueX: 0.94   // 蓝方基地相对X坐标
+
+    // 场地几何由 GameData::miniMapProfile 提供；机器人与路径共用同一内容区。
+    readonly property var fallbackMapProfile: ({
+        widthM: 28.0, heightM: 15.0, background: "", trainingMode: false,
+        aspectRatio: 15.0 / 28.0
+    })
+    readonly property var mapProfile: {
+        let profile = root.gameDataContext ? root.gameDataContext.miniMapProfile : null;
+        return profile && Number(profile.widthM) > 0 && Number(profile.heightM) > 0
+                ? profile : root.fallbackMapProfile;
+    }
+    readonly property bool trainingFieldMode: root.mapProfile.trainingMode === true
+    readonly property real fieldAspectRatio: Number(root.mapProfile.aspectRatio) > 0
+                                               ? Number(root.mapProfile.aspectRatio)
+                                               : 15.0 / 28.0
+    readonly property real contentWidth: Math.min(root.width, root.height / root.fieldAspectRatio)
+    readonly property real contentHeight: root.contentWidth * root.fieldAspectRatio
+    readonly property real contentLeft: (root.width - root.contentWidth) / 2.0
+    readonly property real contentTop: (root.height - root.contentHeight) / 2.0
+    readonly property string backgroundSource: {
+        let custom = root.mapProfile.background ? String(root.mapProfile.background) : "";
+        if (custom.length > 0)
+            return custom;
+        return root.trainingFieldMode ? "" : "qrc:/images/minimap_bg.png";
+    }
 
     //哨兵路径规划显示
     property real sentryStartX: gameDataContext ? gameDataContext.sentryStartX : 0.7
@@ -61,8 +87,8 @@ Item {
     /// 官方协议 0x0307：小地图左下角为原点，X 向右、Y 向上；按场地与小地图尺寸等比缩放，
     /// 越界点显示在边界处。等比由 root 的 280×150 设计基准保证。
     function pathPointToCanvas(nx, ny) {
-        return Qt.point(clampUnit(nx) * root.width,
-                        (1.0 - clampUnit(ny)) * root.height);
+        return Qt.point(root.contentLeft + clampUnit(nx) * root.contentWidth,
+                        root.contentTop + (1.0 - clampUnit(ny)) * root.contentHeight);
     }
 
     // --- 信号 ---
@@ -190,6 +216,12 @@ Item {
             root.reloadMarkersFromGameData();
         }
         function onRobotDataUpdated(robotId) {
+            root.reloadMarkersFromGameData();
+        }
+        function onMiniMapMarkersChanged() {
+            root.reloadMarkersFromGameData();
+        }
+        function onMapProfileChanged() {
             root.reloadMarkersFromGameData();
         }
         function onRedBaseAttackedChanged() {
@@ -351,12 +383,28 @@ Item {
     // --- 界面布局 ---
 
     // 1. 背景层
+    Rectangle {
+        x: root.contentLeft
+        y: root.contentTop
+        width: root.contentWidth
+        height: root.contentHeight
+        visible: root.trainingFieldMode
+        color: "#0E1216"
+        border.width: 1
+        border.color: "#5A6A76"
+        z: 0
+    }
+
     Image {
         id: bgImage
-        anchors.fill: parent
-        source: "qrc:/images/minimap_bg.png"
-        opacity: 0.7
+        x: root.contentLeft
+        y: root.contentTop
+        width: root.contentWidth
+        height: root.contentHeight
+        source: root.backgroundSource
+        opacity: root.mapProfile.background ? 1.0 : 0.7
         fillMode: Image.Stretch
+        visible: root.backgroundSource !== ""
         z: 0
     }
 
@@ -449,6 +497,7 @@ Item {
 
     // 前哨站图标
     Image {
+        visible: !root.trainingFieldMode
         source: "qrc:/images/minimap/red_map_outpost.png"
         x: 0.4 * root.width - width / 2
         y: 0.75 * root.height - height / 2
@@ -457,6 +506,7 @@ Item {
         height: sourceSize.height * 0.38 * root.height / 150.0
     }
     Image {
+        visible: !root.trainingFieldMode
         source: "qrc:/images/minimap/blue_map_outpost.png"
         x: 0.608 * root.width - width / 2
         y: 0.24 * root.height - height / 2
@@ -490,7 +540,7 @@ Item {
             id: redBaseAnimation
 
             required property int modelData
-            visible: root.redBaseAttacked
+            visible: root.redBaseAttacked && !root.trainingFieldMode
             source: "qrc:/images/minimap/red_map_base_animation_" + redBaseAnimation.modelData + ".png"
             anchors.centerIn: redBaseIcon
             //四层图片不同的大小
@@ -507,7 +557,7 @@ Item {
             id: blueBaseAnimation
 
             required property int modelData
-            visible: root.blueBaseAttacked
+            visible: root.blueBaseAttacked && !root.trainingFieldMode
             source: "qrc:/images/minimap/blue_map_base_animation_" + blueBaseAnimation.modelData + ".png"
             anchors.centerIn: blueBaseIcon
             property real animationScale: 1.0 + (blueBaseAnimation.modelData - 1) * 0.1 + (blueBaseAnimation.modelData === 1 ? 0 : 0.1)
@@ -532,25 +582,14 @@ Item {
             required property bool isHighLight
             required property bool isDead
 
-            //归一化
-            // 兼容两种坐标输入：归一化(0~1) 或 米坐标(28m x 15m)
-            property real normalizedPosX: {
-                let v = robotMarker.posX;
-                if (v > 1.0 || v < 0.0)
-                    v = v / 28.0;
-                return Math.max(0.0, Math.min(1.0, v));
-            }
-            property real normalizedPosY: {
-                let v = robotMarker.posY;
-                if (v > 1.0 || v < 0.0)
-                    v = v / 15.0;
-                return Math.max(0.0, Math.min(1.0, v));
-            }
-            x: robotMarker.normalizedPosX * root.width
-            // 场地坐标 Y 向上（协议 0x0307：小地图左下角为原点），与哨兵路径、战术地图一致；
-            // 旧实现用 y = posY * height（左上角原点），导致机器人图标与路径上下镜像。
-            y: (1.0 - robotMarker.normalizedPosY) * root.height
+            property real normalizedPosX: Math.max(0.0, Math.min(1.0, Number(robotMarker.posX)))
+            property real normalizedPosY: Math.max(0.0, Math.min(1.0, Number(robotMarker.posY)))
+            property point mappedPoint: root.pathPointToCanvas(robotMarker.normalizedPosX, robotMarker.normalizedPosY)
+            x: robotMarker.mappedPoint.x
+            y: robotMarker.mappedPoint.y
             z: 2
+            scale: root.trainingFieldMode ? root.trainingRobotScale : 1.0
+            transformOrigin: Item.Center
             opacity: robotMarker.isDead ? 0.5 : 1.0
 
             // 锁定线 (高亮显示)
@@ -730,7 +769,7 @@ Item {
             style: Text.Outline
             styleColor: "#A0000000"
         }
-        visible: root.runeEventVisible
+        visible: root.runeEventVisible && !root.trainingFieldMode
     }
 
     // 5. HUD 标题

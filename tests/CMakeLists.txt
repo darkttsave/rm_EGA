@@ -181,6 +181,12 @@ rm26_add_qt_test(TestMinimapPathMapping test_minimap_path_mapping)
 set_property(TEST TestMinimapPathMapping APPEND PROPERTY ENVIRONMENT
     "QT_QPA_PLATFORM=offscreen")
 
+# ROS 雷达独立 JSON Topic → NetworkManager → GameData → MiniMap 数据源
+add_executable(test_ros_radar_bridge unit/test_ros_radar_bridge.cpp)
+target_link_libraries(test_ros_radar_bridge PRIVATE
+    Qt6::Core Qt6::Test RoboMasterClientLib protobuf::libprotobuf)
+rm26_add_qt_test(TestRosRadarBridge test_ros_radar_bridge)
+
 # 性能基准测试
 add_executable(test_benchmark benchmark/test_benchmark.cpp)
 target_link_libraries(test_benchmark PRIVATE Qt6::Core Qt6::Test RoboMasterClientLib protobuf::libprotobuf)

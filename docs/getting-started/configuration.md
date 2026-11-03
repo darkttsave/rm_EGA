@@ -78,6 +78,7 @@ cp config.example.json config.json
 | `RM_CLIENT_ROBOT_ID` | `network.client_robot_id` | `1` |
 | `RM_VIDEO_STREAM_URL` | `video.stream_url` | `udp://0.0.0.0:3334` |
 | `RM_HERO_CAMERA_GRID` | `video.industrial_camera_grid` | 未设置，读取 JSON 中的 `false` |
+| `RM_POSITION_SOURCE` | `position_source` | `official` |
 
 `RM_CLIENT_ROBOT_ID` 与 JSON 字段使用相同范围：红方 `1`–`7`、蓝方 `101`–`107`。其他值会被忽略，
 客户端回到本地配置或安全默认身份，避免界面标签与 MQTT client ID 静默错位。
@@ -119,6 +120,16 @@ JSON 中的 `_comment` 只是给使用者看的说明，客户端不会把它当
 
 构建时如果没有找到 Paho MQTT C，客户端不会启用完整 MQTT 链路。此时界面仍可启动，但 MQTT
 比赛状态和工业相机图传不会工作；请先确认 CMake 输出中已找到 Paho，再排查配置。
+
+### 雷达位置来源与训练场地图
+
+`position_source` 支持 `official`（默认）与 `ros_bridge`。默认值保持官方位置链路不变；
+训练场联调时改为 `ros_bridge`，客户端才会从 `ros_bridge.topic`（默认
+`RosRadarPositions`）读取独立版本化 JSON。两套位置数据分开保存，不会互相覆盖。
+
+`map` 段配置世界坐标到小地图的转换。训练场示例为 `12.15 m × 9.15 m`，左下角对应世界
+坐标 `(-4.99842, -4.44607) m`，`radar_stale_timeout_ms=2000` 表示桥接停止超过 2 秒后清除
+旧目标。修改 MQTT 地址、Topic 或位置来源后建议重启客户端。
 
 ### `video`
 

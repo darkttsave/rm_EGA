@@ -68,6 +68,11 @@ public:
   QJsonObject getRobotConfig(const QString &robotType) const;
   QString getRobotLayout(const QString &robotType) const;
 
+  // 小地图与 ROS 雷达桥接配置
+  QJsonObject getMapConfig() const;
+  QString getPositionSource() const;
+  QString getRosRadarTopic() const;
+
   // --- AR 叠加配置访问器 ---
   bool getAROverlayEnabled() const;       // AR 叠加是否启用 (默认false)
   QString getARModelPath() const;         // YOLO 模型路径

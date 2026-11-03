@@ -31,6 +31,7 @@
 // --- 头文件包含 ---
 #include "../core/GameData.h" // 比赛数据中心，用于存储解析后的比赛状态
 #include "Protocol.h"         // 协议处理类，提供 Protobuf 序列化/反序列化
+#include "RosRadarBridgeProtocol.h"
 #include <QHostAddress>       // Qt 网络地址类
 #include <QObject>            // Qt 基础对象类
 #include <QUdpSocket>         // Qt UDP 套接字类
@@ -142,6 +143,9 @@ public:
   quint32 lastKeyboardMouseKeyboardValue() const {
     return m_lastKeyboardMouseKeyboardValue;
   }
+
+  // 解析独立 ROS 雷达桥接 JSON；公开入口同时供离线链路测试使用。
+  bool processRosRadarBridgePayload(const QByteArray &payload);
 
   // --- MQTT 连接控制 ---
 

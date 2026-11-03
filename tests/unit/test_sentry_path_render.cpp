@@ -100,6 +100,8 @@ private slots:
   /// 起点按地图尺寸换算，且不改变既有数值（111/280、66/150）
   void normalizesStartByFieldSize() {
     GameData gameData;
+    // 固定为官方 28x15 m 场地：本测试断言的是协议换算，不随本地 map 配置漂移
+    gameData.setMapProfile(MapProfile::officialField());
     gameData.updateSentryPath(makePath(111, 66, {0}, {0}));
 
     QVERIFY(approximately(gameData.sentryStartX(), 111.0 / kFieldWidthDm));
@@ -109,6 +111,8 @@ private slots:
   /// 回归核心：增量为 +1 时必须是一小步，不能变成"归一化坐标 1.0"
   void unitIncrementIsNotFullMapWidth() {
     GameData gameData;
+    // 固定为官方 28x15 m 场地：本测试断言的是协议换算，不随本地 map 配置漂移
+    gameData.setMapProfile(MapProfile::officialField());
     gameData.updateSentryPath(makePath(111, 66, {1}, {1}));
 
     const QVariantList deltasX = gameData.sentryPathDeltasX();
@@ -128,6 +132,8 @@ private slots:
   /// +1 增量在画布上只前进约 1.43 像素，而不是整整一个画布宽度
   void unitIncrementPixelsAreTiny() {
     GameData gameData;
+    // 固定为官方 28x15 m 场地：本测试断言的是协议换算，不随本地 map 配置漂移
+    gameData.setMapProfile(MapProfile::officialField());
     gameData.updateSentryPath(makePath(111, 66, {1}, {0}));
 
     const QList<Point> pixels = toPixels(accumulateNormalized(gameData));
@@ -141,6 +147,8 @@ private slots:
   /// 负增量必须保留，不能被截断成 0
   void preservesNegativeIncrements() {
     GameData gameData;
+    // 固定为官方 28x15 m 场地：本测试断言的是协议换算，不随本地 map 配置漂移
+    gameData.setMapProfile(MapProfile::officialField());
     gameData.updateSentryPath(makePath(111, 66, {-2, 1}, {-1, 1}));
 
     const QVariantList deltasX = gameData.sentryPathDeltasX();
@@ -174,6 +182,8 @@ private slots:
     }
 
     GameData gameData;
+    // 固定为官方 28x15 m 场地：本测试断言的是协议换算，不随本地 map 配置漂移
+    gameData.setMapProfile(MapProfile::officialField());
     QSignalSpy spy(&gameData, &GameData::sentryPathUpdated);
     gameData.updateSentryPath(makePath(111, 66, offsetsX, offsetsY));
 
@@ -225,6 +235,8 @@ private slots:
     }
 
     GameData gameData;
+    // 固定为官方 28x15 m 场地：本测试断言的是协议换算，不随本地 map 配置漂移
+    gameData.setMapProfile(MapProfile::officialField());
     gameData.updateSentryPath(makePath(111, 66, offsetsX, offsetsY));
 
     const QList<Point> pixels = toPixels(accumulateNormalized(gameData));

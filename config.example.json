@@ -31,6 +31,11 @@
         "client_robot_id": 1,
         "_comment": "示例只连接本机；机器人身份只接受红方 1-7 或蓝方 101-107，现场值不要提交"
     },
+    "position_source": "ros_bridge",
+    "ros_bridge": {
+        "topic": "RosRadarPositions",
+        "_comment": "可选official，position_source=ros_bridge 时，小地图使用该独立 JSON Topic；不会冒充官方 RadarInfoToClient"
+    },
     "video": {
         "default_path": "",
         "stream_url": "udp://0.0.0.0:3334",
@@ -88,6 +93,20 @@
                 "descend": "Ctrl"
             }
         }
+    },
+    "map": {
+        "name": "training_field",
+        "mode": "training",
+        "width_m": 12.15,
+        "height_m": 9.15,
+        "origin_x_m": -4.99842,
+        "origin_y_m": -4.44607,
+        "background": "qrc:/images/minimap_train2.png",
+        "grid_step_m": 1.0,
+        "show_grid": false,
+        "radar_stale_timeout_ms": 2000,
+        "show_debug_overlay": false,
+        "_comment": "训练场标定：243x183 px @ 0.05 m/px；ROS 世界坐标映射使用该原点和尺寸"
     },
     "ar_overlay": {
         "enabled": false,

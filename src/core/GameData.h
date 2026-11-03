@@ -13,6 +13,8 @@
 #define GAMEDATA_H
 
 #include "../network/Protocol.h"
+#include "../network/RosRadarBridgeProtocol.h"
+#include "MapProfile.h"
 #include "TimedEventRules.h"
 #include <QDateTime>
 #include <QImage>
@@ -514,6 +516,10 @@ struct SentryPathData {
     float startY;               // 哨兵起始Y坐标 (0.0 - 1.0, 左下角为原点)
     QList<float> pathDeltasX;   // 路径X增量列表（相对地图宽度归一化）
     QList<float> pathDeltasY;   // 路径Y增量列表（相对地图高度归一化）
+    qint32 rawStartDmX = 0;
+    qint32 rawStartDmY = 0;
+    QList<qint32> rawDeltasDmX;
+    QList<qint32> rawDeltasDmY;
 
     SentryPathData() : startX(0.0f), startY(0.0f) {}
 };
@@ -572,7 +578,9 @@ Q_PROPERTY(float sentryStartX READ sentryStartX NOTIFY sentryPathUpdated)
 Q_PROPERTY(float sentryStartY READ sentryStartY NOTIFY sentryPathUpdated)
 Q_PROPERTY(QVariantList sentryPathDeltasX READ sentryPathDeltasX NOTIFY sentryPathUpdated)
 Q_PROPERTY(QVariantList sentryPathDeltasY READ sentryPathDeltasY NOTIFY sentryPathUpdated)
-Q_PROPERTY(QVariantList miniMapMarkers READ getMiniMapMarkers NOTIFY robotPositionUpdated)
+Q_PROPERTY(QVariantList miniMapMarkers READ getMiniMapMarkers NOTIFY miniMapMarkersChanged)
+Q_PROPERTY(QVariantMap miniMapProfile READ miniMapProfile NOTIFY mapProfileChanged)
+Q_PROPERTY(QString positionSource READ positionSource NOTIFY positionSourceChanged)
 
 Q_PROPERTY(QVariantMap myRobot READ getMyRobot NOTIFY myRobotUpdated)
 
@@ -995,6 +1003,13 @@ public:
 
   // --- 小地图数据访问器 ---
   QVariantList getMiniMapMarkers() const;
+  QVariantMap miniMapProfile() const { return m_mapProfile.toVariantMap(); }
+  QString positionSource() const { return m_positionSource; }
+  bool isRosRadarFresh() const;
+  const RosRadarSnapshot &rosRadarSnapshot() const { return m_rosRadarSnapshot; }
+  void setMapProfile(const MapProfile &profile);
+  void setPositionSource(const QString &source);
+  void updateRosRadarPositions(const RosRadarSnapshot &snapshot);
 
   // --- tab面板 机器人数据列表访问器 ---
   QVariantList getRedRobotsDataQml() const;   // 红方机器人列表
@@ -1242,6 +1257,9 @@ signals:
   void videoSourceChanged(const QString &url, bool isPlaying);
   void robotPositionUpdated(quint8 robotId, float x, float y, float angle,
                             quint8 isHighLight);
+  void miniMapMarkersChanged();
+  void mapProfileChanged();
+  void positionSourceChanged();
   /**
    * @brief 基地状态变化信号
    * @param isRed 是否为红方基地
@@ -1366,11 +1384,17 @@ private:
   // 内部数据成员
   mutable QMutex m_mutex;
   QList<RobotData> m_robots;
+  MapProfile m_mapProfile;
+  QString m_positionSource = QStringLiteral("official");
+  RosRadarSnapshot m_rosRadarSnapshot;
+  qint64 m_rosRadarLastUpdateMs = 0;
+  bool m_rosRadarFresh = false;
 
   // 私有辅助更新方法
   // 信号节流：dataChanged 最大发射频率控制在 20Hz（每 50ms）
   void emitDataChanged();
   void emitRuneVoicePromptIfDue();
+  void rebuildSentryPathCoordinates();
   //封装了 HP/Level 等全量状态更新，以及 击杀、复活、伤害检测 逻辑
   void updateStandardStatus(RobotData *robot, const robomaster::RobotStatus &data);
   //封装了热量超限计算逻辑

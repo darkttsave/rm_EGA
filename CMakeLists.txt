@@ -304,6 +304,7 @@ set(SOURCES
     src/simulator/ProtocolSimulator.cpp
     src/network/Protocol.cpp
     src/network/NetworkManager.cpp
+    src/network/RosRadarBridgeProtocol.cpp
     src/network/VideoReceiver.cpp
     src/network/VideoDatagramLogger.cpp
     src/network/VideoReceiver.h
@@ -322,6 +323,7 @@ set(SOURCES
     src/network/S1ProtocolManager.cpp
     ${PROTO_SRCS}
     src/core/GameData.cpp
+    src/core/MapProfile.cpp
     src/core/LogFileNaming.cpp
     src/core/TimedEventRules.cpp
     src/core/PopupStateMachine.cpp
@@ -362,6 +364,7 @@ set(HEADERS
     src/simulator/ProtocolSimulator.h
     src/network/Protocol.h
     src/network/NetworkManager.h
+    src/network/RosRadarBridgeProtocol.h
     src/network/CRC.h
     src/network/MqttManager.h
     src/network/MqttLogger.h
@@ -369,6 +372,7 @@ set(HEADERS
     src/network/H264StreamRecoveryPolicy.h
     src/network/S1ProtocolManager.h
     src/core/GameData.h
+    src/core/MapProfile.h
     src/core/LogFileNaming.h
     src/core/TimedEventRules.h
     src/core/PopupTypes.h

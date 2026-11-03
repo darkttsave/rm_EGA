@@ -295,6 +295,7 @@ bool NetworkManager::isUdpListening() const {
 quint16 NetworkManager::listeningPort() const {
   return m_udpSocket ? m_udpSocket->localPort() : 0;
 }
+
 */
 bool NetworkManager::isUdpListening() const {
   return m_udpSocket && m_udpSocket->state() == QAbstractSocket::BoundState;
@@ -302,6 +303,28 @@ bool NetworkManager::isUdpListening() const {
 
 quint16 NetworkManager::listeningPort() const {
   return m_udpSocket ? m_udpSocket->localPort() : 0;
+}
+
+bool NetworkManager::processRosRadarBridgePayload(const QByteArray &payload) {
+  if (!m_gameData) {
+    return false;
+  }
+
+  RosRadarSnapshot snapshot;
+  QString error;
+  if (!RosRadarBridgeProtocol::parse(payload, snapshot, &error)) {
+    qWarning() << "NetworkManager: RosRadarPositions 解析失败:" << error;
+    emit errorOccurred(QStringLiteral("RosRadarPositions 解析失败：%1").arg(error));
+    return false;
+  }
+
+  m_gameData->updateRosRadarPositions(snapshot);
+  emit dataReceived(
+      QStringLiteral("MQTT RX RosRadarPositions robots=%1 frame_id=%2")
+          .arg(snapshot.robots.size())
+          .arg(snapshot.frameId)
+          .toUtf8());
+  return true;
 }
 
 // --- 数据发送函数 ---
@@ -1124,6 +1147,7 @@ void NetworkManager::subscribeToTopics() {
       "DartSelectTargetStatusSync", // 飞镖目标选择状态同步
       "SentryCtrlResult",       // 哨兵控制结果
       "AirSupportStatusSync",   // 空中支援状态
+      ConfigManager::instance().getRosRadarTopic(), // 独立 ROS 雷达桥接 JSON
   };
 
   for (const QString &topic : topics) {
@@ -1135,6 +1159,11 @@ void NetworkManager::processMqttMessage(const QString &topic,
                                         const QByteArray &payload) {
   if (!m_gameData)
     return;
+
+  if (topic == ConfigManager::instance().getRosRadarTopic()) {
+    processRosRadarBridgePayload(payload);
+    return;
+  }
 
   const bool detailedVideoTrace =
       !isHighRateVideoMessage(topic, payload) || verboseVideoLogEnabled();

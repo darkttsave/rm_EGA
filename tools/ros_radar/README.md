@@ -1,8 +1,9 @@
-# ROS 2 雷达位置检查器
+# ROS 2 雷达检查器与 MQTT 桥接
 
 只订阅 `/robot_map_positions`，按 `vision_interface/msg/RobotMapPositions` 解析每帧
 完整快照，并在终端显示机器人原始像素坐标、世界坐标、雷达内部 ID 与接收频率。
-工具不会发布消息，不做小地图坐标转换，也不把雷达 ID 映射为裁判系统 ID。
+Inspector 不发布消息。`bridge.py` 则把同一份已校验完整快照发布到独立 MQTT Topic
+`RosRadarPositions`，供训练场小地图使用；它不会伪装成官方 `RadarInfoToClient`。
 
 ## 结构
 
@@ -11,6 +12,7 @@ tools/ros_radar/
 ├── receiver.py   # ROS 节点、Reliable/Keep Last/Depth 10、接收统计
 ├── parser.py     # 纯 Python 字段解析与数据合法性校验
 ├── inspector.py  # 终端输出、快照变化、频率和 JSONL 记录
+├── bridge.py     # ROS 完整快照 → 版本化 JSON → 本地 MQTT
 └── tests/        # 不需要 ROS 环境的离线单元测试
 ```
 
@@ -28,6 +30,67 @@ python3 -m tools.ros_radar.inspector --help
 ```
 
 离线测试使用与 ROS 消息同字段的对象，只验证解析和检查器行为，不能代替真实链路验收。
+
+## ROS → MQTT 桥接
+
+桥接器需要 ROS Python 环境和 `paho-mqtt>=2.0`。建议创建一个能继承 ROS 系统包的独立
+虚拟环境：
+
+```bash
+cd "$HOME/opensource/RM26_Client-ros-radar"
+python3 -m venv --system-site-packages .venv-ros-bridge
+.venv-ros-bridge/bin/python -m pip install 'paho-mqtt>=2.0'
+```
+
+启动本地 Broker 后，在已构建 `vision_interface` 的终端运行：
+
+```bash
+source /opt/ros/jazzy/setup.bash
+source "$HOME/vision_interface_ws/install/setup.bash"
+cd "$HOME/opensource/RM26_Client-ros-radar"
+.venv-ros-bridge/bin/python -m tools.ros_radar.bridge \
+  --broker 127.0.0.1 --port 3333 \
+  --mqtt-topic RosRadarPositions
+```
+
+Humble 设备把第一条 source 改为 `/opt/ros/humble/setup.bash`。Broker、端口和 Topic 必须
+与客户端配置一致。桥接 JSON 固定包含 `schema=rm26.ros_radar_positions`、`version=1`、
+ROS 时间戳、`frame_id`、图像尺寸、比例尺，以及每个目标的原始颜色、ID、像素坐标、
+世界坐标和 `in_bounds`。`robots=[]` 也会发布，用于立即清除旧目标。
+
+桥接器默认 MQTT QoS 1、不保留消息；Broker 地址、端口、Topic、client-id、ROS Topic、
+超时和最大帧数均可通过命令行参数配置。按 Ctrl+C 会输出接收、解析、发布和失败统计。
+
+## 客户端小地图
+
+复制本地配置，并把位置来源改为 `ros_bridge`：
+
+```json
+{
+  "position_source": "ros_bridge",
+  "ros_bridge": { "topic": "RosRadarPositions" }
+}
+```
+
+训练场标定在同一配置的 `map` 段：`12.15 m × 9.15 m`，世界坐标原点
+`(-4.99842, -4.44607) m`。启动客户端：
+
+```bash
+cd "$HOME/opensource/RM26_Client-ros-radar"
+cp -n config.example.json config.json
+# 编辑 config.json：position_source 改为 ros_bridge
+cmake --preset dev
+cmake --build --preset dev
+./build/dev/RoboMasterClient2025
+```
+
+恢复官方位置只需把 `position_source` 改回 `official` 并重启客户端。两套位置状态在
+GameData 内分开保存；ROS 消息不会改写官方机器人状态。ROS 帧按完整快照替换，ID 跳变时
+旧 ID 自动消失，空数组立即清空；默认 2000 ms 未收到新帧也会清除旧标记。
+
+最简现场验证顺序：先启动 Broker，再启动客户端和桥接器，确认桥接器出现“首帧已解析并
+发布到 MQTT”；随后观察单机器人移动、多机器人、ID 跳变、空帧和停止雷达超过 2 秒的清除
+效果。自动测试通过不等同于真实 UI 验收。
 
 ## 启动
 

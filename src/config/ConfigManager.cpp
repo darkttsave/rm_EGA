@@ -225,6 +225,32 @@ QString ConfigManager::getRobotLayout(const QString &robotType) const {
   return getRobotConfig(robotType)["ui_layout"].toString("standard");
 }
 
+QJsonObject ConfigManager::getMapConfig() const {
+  return m_config["map"].toObject();
+}
+
+QString ConfigManager::getPositionSource() const {
+  QString value = qEnvironmentVariable("RM_POSITION_SOURCE").trimmed().toLower();
+  if (value.isEmpty()) {
+    value = m_config["position_source"].toString("official").trimmed().toLower();
+  }
+  if (value != QStringLiteral("official") &&
+      value != QStringLiteral("ros_bridge")) {
+    qWarning() << "ConfigManager: 未知 position_source=" << value
+               << "，按 official 处理";
+    return QStringLiteral("official");
+  }
+  return value;
+}
+
+QString ConfigManager::getRosRadarTopic() const {
+  const QString topic =
+      m_config["ros_bridge"].toObject()["topic"].toString(
+          QStringLiteral("RosRadarPositions"));
+  return topic.trimmed().isEmpty() ? QStringLiteral("RosRadarPositions")
+                                   : topic.trimmed();
+}
+
 // --- AR 叠加配置访问器 ---
 
 bool ConfigManager::getAROverlayEnabled() const {

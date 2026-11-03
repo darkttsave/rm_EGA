@@ -11,6 +11,7 @@
 #include "GameData.h"
 #include "robomaster.pb.h"
 #include "GameConstants.h"
+#include "../config/ConfigManager.h"
 #include <QColor>
 #include <QDebug>
 #include <QJsonDocument>
@@ -460,6 +461,25 @@ QString officialEventPopupMessageForEvent(const robomaster::Event &data,
 GameData::GameData(QObject *parent)
     : QObject(parent), m_currentRobotId(1), m_gameTimer(new QTimer(this)) {
   initializeRobots();
+
+  m_mapProfile = MapProfile::loadFromConfig();
+  m_positionSource = ConfigManager::instance().getPositionSource();
+  connect(&ConfigManager::instance(), &ConfigManager::configReloaded, this,
+          [this]() {
+            setMapProfile(MapProfile::loadFromConfig());
+            setPositionSource(ConfigManager::instance().getPositionSource());
+          });
+  connect(this, &GameData::robotPositionUpdated, this,
+          [this](quint8, float, float, float, quint8) {
+            if (m_positionSource == QStringLiteral("official")) {
+              emit miniMapMarkersChanged();
+            }
+          });
+  connect(this, &GameData::robotDataUpdated, this, [this](quint8) {
+    if (m_positionSource == QStringLiteral("official")) {
+      emit miniMapMarkersChanged();
+    }
+  });
 
   // 初始化基地数据
   m_redBase.team = TeamColor::RED;
@@ -1339,6 +1359,35 @@ QVariantMap GameData::dartMessageData() const {
 QVariantList GameData::getMiniMapMarkers() const {
   QVariantList list;
 
+  if (m_positionSource == QStringLiteral("ros_bridge")) {
+    if (!isRosRadarFresh() || !m_mapProfile.hasValidSize()) {
+      return list;
+    }
+
+    for (const RosRadarRobotPosition &robot : m_rosRadarSnapshot.robots) {
+      const bool isRed = robot.color == 2;
+      const int displayRobotId = isRed ? robot.radarId : 100 + robot.radarId;
+      QVariantMap marker;
+      marker["key"] = isRed ? robot.radarId : robot.radarId + 7;
+      marker["robotId"] = displayRobotId;
+      marker["radarColor"] = robot.color;
+      marker["radarId"] = robot.radarId;
+      marker["pixelX"] = robot.pixelX;
+      marker["pixelY"] = robot.pixelY;
+      marker["worldX"] = robot.worldX;
+      marker["worldY"] = robot.worldY;
+      marker["inBounds"] = robot.inBounds;
+      marker["isRed"] = isRed;
+      marker["posX"] = m_mapProfile.worldToNormalizedX(robot.worldX);
+      marker["posY"] = m_mapProfile.worldToNormalizedY(robot.worldY);
+      marker["angle"] = 0.0;
+      marker["isHighLight"] = false;
+      marker["isDead"] = false;
+      list.append(marker);
+    }
+    return list;
+  }
+
   //归一化(当前协议传来已经是标准化，如需要这里可改为实际场地的大小)
   constexpr qreal kMapWidthM = 28.0;
   constexpr qreal kMapHeightM = 15.0;
@@ -1375,6 +1424,83 @@ QVariantList GameData::getMiniMapMarkers() const {
     list.append(m);
   }
   return list;
+}
+
+bool GameData::isRosRadarFresh() const {
+  if (m_rosRadarLastUpdateMs <= 0 || m_mapProfile.radarStaleTimeoutMs <= 0) {
+    return false;
+  }
+  return QDateTime::currentMSecsSinceEpoch() - m_rosRadarLastUpdateMs <=
+         m_mapProfile.radarStaleTimeoutMs;
+}
+
+void GameData::setMapProfile(const MapProfile &profile) {
+  m_mapProfile = profile;
+  rebuildSentryPathCoordinates();
+  emit mapProfileChanged();
+  emit sentryPathUpdated();
+  emit miniMapMarkersChanged();
+}
+
+void GameData::rebuildSentryPathCoordinates() {
+  const MapProfile profile =
+      m_positionSource == QStringLiteral("ros_bridge")
+          ? m_mapProfile
+          : MapProfile::officialField();
+  if (!profile.hasValidSize()) {
+    m_allySentryPath.startX = 0.0f;
+    m_allySentryPath.startY = 0.0f;
+    m_allySentryPath.pathDeltasX.clear();
+    m_allySentryPath.pathDeltasY.clear();
+    return;
+  }
+
+  const double startWorldX = static_cast<double>(m_allySentryPath.rawStartDmX) / 10.0;
+  const double startWorldY = static_cast<double>(m_allySentryPath.rawStartDmY) / 10.0;
+  m_allySentryPath.startX =
+      static_cast<float>(profile.worldToNormalizedX(startWorldX));
+  m_allySentryPath.startY =
+      static_cast<float>(profile.worldToNormalizedY(startWorldY));
+
+  m_allySentryPath.pathDeltasX.clear();
+  m_allySentryPath.pathDeltasX.reserve(m_allySentryPath.rawDeltasDmX.size());
+  for (qint32 delta : m_allySentryPath.rawDeltasDmX) {
+    m_allySentryPath.pathDeltasX.append(
+        static_cast<float>((static_cast<double>(delta) / 10.0) /
+                           profile.widthM));
+  }
+  m_allySentryPath.pathDeltasY.clear();
+  m_allySentryPath.pathDeltasY.reserve(m_allySentryPath.rawDeltasDmY.size());
+  for (qint32 delta : m_allySentryPath.rawDeltasDmY) {
+    m_allySentryPath.pathDeltasY.append(
+        static_cast<float>((static_cast<double>(delta) / 10.0) /
+                           profile.heightM));
+  }
+}
+
+void GameData::setPositionSource(const QString &source) {
+  const QString normalized = source.trimmed().toLower();
+  const QString accepted = normalized == QStringLiteral("ros_bridge")
+                               ? QStringLiteral("ros_bridge")
+                               : QStringLiteral("official");
+  if (m_positionSource == accepted) {
+    return;
+  }
+  m_positionSource = accepted;
+  rebuildSentryPathCoordinates();
+  qInfo() << "[MiniMap] position_source=" << m_positionSource;
+  emit positionSourceChanged();
+  emit sentryPathUpdated();
+  emit miniMapMarkersChanged();
+}
+
+void GameData::updateRosRadarPositions(const RosRadarSnapshot &snapshot) {
+  m_rosRadarSnapshot = snapshot;
+  m_rosRadarLastUpdateMs = QDateTime::currentMSecsSinceEpoch();
+  m_rosRadarFresh = true;
+  if (m_positionSource == QStringLiteral("ros_bridge")) {
+    emit miniMapMarkersChanged();
+  }
 }
 
 /**
@@ -4275,35 +4401,21 @@ void GameData::updateSentryPath(const robomaster::RobotPathPlanInfo &data) {
            << ") dm, deltas=" << data.offset_x_size() << "/"
            << data.offset_y_size();
 
-  // 场地尺寸（分米），与通信协议一致；仅用于把分米换算成归一化坐标。
-  constexpr float kMapWidthDm = 280.0f;
-  constexpr float kMapHeightDm = 150.0f;
-
-  // 起点：按地图尺寸换算。保留现有坐标轴方向（左下角为原点），
-  // 不做 0~1 裁剪，避免改变起点位置。
-  m_allySentryPath.startX =
-      static_cast<float>(data.start_pos_x()) / kMapWidthDm;
-  m_allySentryPath.startY =
-      static_cast<float>(data.start_pos_y()) / kMapHeightDm;
-
-  // 增量：有符号，逐个除以对应尺寸后原样保留。
-  // 这里**不能**对单个增量做 0~1 归一化或裁剪：
-  //   - 值为 +1 的增量会被误当成“归一化坐标 1.0”，一步跨越整张地图；
-  //   - 负增量会被截成 0，导致回退路径丢失。
-  // 逐点累加与像素换算由 QML 负责（MiniMap.qml 的 sentryPathCanvas）。
-  m_allySentryPath.pathDeltasX.clear();
-  m_allySentryPath.pathDeltasX.reserve(data.offset_x_size());
+  // 保留协议分米原值，按当前 MapProfile 统一换算。这样切换训练场配置时，
+  // 哨兵路径与 ROS 世界坐标标记使用同一场地几何，不改变增量累计语义。
+  m_allySentryPath.rawStartDmX = static_cast<qint32>(data.start_pos_x());
+  m_allySentryPath.rawStartDmY = static_cast<qint32>(data.start_pos_y());
+  m_allySentryPath.rawDeltasDmX.clear();
+  m_allySentryPath.rawDeltasDmX.reserve(data.offset_x_size());
   for (int i = 0; i < data.offset_x_size(); ++i) {
-    m_allySentryPath.pathDeltasX.append(
-        static_cast<float>(data.offset_x(i)) / kMapWidthDm);
+    m_allySentryPath.rawDeltasDmX.append(static_cast<qint32>(data.offset_x(i)));
   }
-
-  m_allySentryPath.pathDeltasY.clear();
-  m_allySentryPath.pathDeltasY.reserve(data.offset_y_size());
+  m_allySentryPath.rawDeltasDmY.clear();
+  m_allySentryPath.rawDeltasDmY.reserve(data.offset_y_size());
   for (int i = 0; i < data.offset_y_size(); ++i) {
-    m_allySentryPath.pathDeltasY.append(
-        static_cast<float>(data.offset_y(i)) / kMapHeightDm);
+    m_allySentryPath.rawDeltasDmY.append(static_cast<qint32>(data.offset_y(i)));
   }
+  rebuildSentryPathCoordinates();
   emit sentryPathUpdated();
 }
 
@@ -4377,6 +4489,14 @@ void GameData::setKickedAll(bool value) {
 void GameData::update() {
   // 更新机器人状态
   bool currentRobotChanged = false;
+
+  if (m_rosRadarFresh && !isRosRadarFresh()) {
+    m_rosRadarFresh = false;
+    if (m_positionSource == QStringLiteral("ros_bridge")) {
+      qInfo() << "[MiniMap] ROS 雷达位置已超时，清除旧目标";
+      emit miniMapMarkersChanged();
+    }
+  }
 
   // 比赛时间由外部权威来源（例如 NetworkManager -> updateGameState）写入时
   // 禁止本地自行递减以避免与网络写入冲突导致视觉"横跳"。

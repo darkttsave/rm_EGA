@@ -18,6 +18,7 @@
         <file alias="minimap_bg.png">resources/images/base_bg_2026_fq_small.png</file>
         <file alias="minimap_bg_red_left.png">resources/images/base_bg_2026_fq_small.png</file>
         <file alias="minimap_bg_blue_left.png">resources/images/base_bg_2026_fq_small_blue_left.png</file>
+        <file alias="minimap_train2.png">resources/images/minimap_train2.png</file>
         <file alias="red_message_guard.png">resources/images/red_message_guard.png</file>
         <file alias="red_robot_icon.png">resources/images/red_robot_icon.png</file>
         <file alias="red_team_logo.png">resources/images/red_team_logo.png</file>

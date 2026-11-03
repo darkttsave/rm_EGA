@@ -175,7 +175,7 @@ pdf_*.txt
 
 
 /.venv-mqtt
-
+/.venv-ros-bridge
 # 本机凭据、私钥与认证信息不得进入公开仓库
 id_rsa
 id_ed25519
