@@ -47,15 +47,6 @@ bool isHighRateVideoMessage(const QString &topic, const QByteArray &payload) {
   return topic == QLatin1String("CustomByteBlock") && payload.size() > 100;
 }
 
-template <typename RepeatedFieldT>
-QJsonArray repeatedFieldToJsonArray(const RepeatedFieldT &field) {
-  QJsonArray array;
-  for (const auto value : field) {
-    array.append(static_cast<int>(value));
-  }
-  return array;
-}
-
 template <typename MessageT>
 QByteArray serializeMessage(const MessageT &message) {
   std::string buffer;
@@ -1182,105 +1173,17 @@ void NetworkManager::processMqttMessage(const QString &topic,
       [&](const QString &detail, const QJsonObject &fields) {
         dumpMqttEvent(QStringLiteral("parsed"), topic, payload, m_gameData,
                       detail, fields);
+      },
+      [&](quint32 stage, quint16 remaining, bool paused) {
+        m_hasMqttGameStatus = true;
+        m_lastMqttStage = static_cast<robomaster::GameStage>(stage);
+        m_lastMqttTimeRemaining = remaining;
+        m_lastMqttPaused = paused;
       });
 
   // 根据 Topic 解析对应的 Protobuf 消息
   if (officialResult != OfficialMessageHandler::Result::Unsupported) {
     // 已由官方消息处理模块处理，仍执行下面的公共收尾。
-  } else if (topic == "GameStatus") {
-    robomaster::GameStatus msg;
-    if (msg.ParseFromArray(payload.data(), payload.size())) {
-      const auto stage =
-          static_cast<robomaster::GameStage>(msg.current_stage());
-      const quint16 timeRemaining = static_cast<quint16>(msg.stage_countdown_sec());
-      const bool isPaused = msg.is_paused();
-
-      m_hasMqttGameStatus = true;
-      m_lastMqttStage = stage;
-      m_lastMqttTimeRemaining = timeRemaining;
-      m_lastMqttPaused = isPaused;
-
-      dumpMqttEvent(
-          QStringLiteral("parsed"), topic, payload, m_gameData,
-          QStringLiteral("GameStatus current_stage=%1 countdown=%2 paused=%3")
-              .arg(msg.current_stage())
-              .arg(msg.stage_countdown_sec())
-              .arg(msg.is_paused()),
-          QJsonObject{{QStringLiteral("current_stage"),
-                       static_cast<int>(msg.current_stage())},
-                      {QStringLiteral("stage_countdown_sec"),
-                       static_cast<int>(msg.stage_countdown_sec())},
-                      {QStringLiteral("stage_elapsed_sec"),
-                       static_cast<int>(msg.stage_elapsed_sec())},
-                      {QStringLiteral("is_paused"), msg.is_paused()}});
-      m_gameData->updateGameStatus(msg);
-    }
-  } else if (topic == "GlobalUnitStatus") {
-      robomaster::GlobalUnitStatus msg;
-      if (msg.ParseFromArray(payload.data(), payload.size())) {
-        dumpMqttEvent(
-            QStringLiteral("parsed"), topic, payload, m_gameData,
-            QStringLiteral("GlobalUnitStatus robot_health=%1 robot_bullets=%2")
-                .arg(QString::fromUtf8(
-                    QJsonDocument(repeatedFieldToJsonArray(msg.robot_health()))
-                        .toJson(QJsonDocument::Compact)))
-                .arg(QString::fromUtf8(
-                    QJsonDocument(repeatedFieldToJsonArray(msg.robot_bullets()))
-                        .toJson(QJsonDocument::Compact))),
-            QJsonObject{{QStringLiteral("robot_health"),
-                         repeatedFieldToJsonArray(msg.robot_health())},
-                        {QStringLiteral("robot_bullets"),
-                         repeatedFieldToJsonArray(msg.robot_bullets())},
-                        {QStringLiteral("robot_health_size"),
-                         msg.robot_health_size()},
-                        {QStringLiteral("robot_bullets_size"),
-                         msg.robot_bullets_size()},
-                        {QStringLiteral("base_health"),
-                         static_cast<int>(msg.base_health())},
-                        {QStringLiteral("enemy_base_health"),
-                         static_cast<int>(msg.enemy_base_health())},
-                        {QStringLiteral("outpost_health"),
-                         static_cast<int>(msg.outpost_health())},
-                        {QStringLiteral("enemy_outpost_health"),
-                         static_cast<int>(msg.enemy_outpost_health())},
-                        {QStringLiteral("base_status"),
-                         static_cast<int>(msg.base_status())},
-                        {QStringLiteral("enemy_base_status"),
-                         static_cast<int>(msg.enemy_base_status())},
-                        {QStringLiteral("outpost_status"),
-                         static_cast<int>(msg.outpost_status())},
-                        {QStringLiteral("enemy_outpost_status"),
-                         static_cast<int>(msg.enemy_outpost_status())},
-                        {QStringLiteral("base_shield"),
-                         static_cast<int>(msg.base_shield())},
-                        {QStringLiteral("enemy_base_shield"),
-                         static_cast<int>(msg.enemy_base_shield())},
-                        {QStringLiteral("total_damage_ally"),
-                         static_cast<int>(msg.total_damage_ally())},
-                        {QStringLiteral("total_damage_enemy"),
-                         static_cast<int>(msg.total_damage_enemy())}});
-        // 详细明文日志：打印所有字段
-        QStringList rHp, rBul;
-        for (int i = 0; i < msg.robot_health_size(); ++i) rHp << QString::number(msg.robot_health(i));
-        for (int i = 0; i < msg.robot_bullets_size(); ++i) rBul << QString::number(msg.robot_bullets(i));
-        qInfo().noquote()
-            << QStringLiteral("[GlobalUnitStatus] base_hp=%1 base_status=%2 base_shield=%3 "
-                              "outpost_hp=%4 outpost_status=%5 "
-                              "enemy_base_hp=%6 enemy_base_status=%7 enemy_base_shield=%8 "
-                              "enemy_outpost_hp=%9 enemy_outpost_status=%10 "
-                              "robot_hp=[%11] robot_bullets=[%12] "
-                              "dmg_ally=%13 dmg_enemy=%14")
-                   .arg(msg.base_health()).arg(msg.base_status())
-                   .arg(msg.base_shield()).arg(msg.outpost_health())
-                   .arg(msg.outpost_status()).arg(msg.enemy_base_health())
-                   .arg(msg.enemy_base_status()).arg(msg.enemy_base_shield())
-                   .arg(msg.enemy_outpost_health()).arg(msg.enemy_outpost_status())
-                   .arg(rHp.join(QStringLiteral(",")))
-                   .arg(rBul.join(QStringLiteral(",")))
-                   .arg(msg.total_damage_ally()).arg(msg.total_damage_enemy());
-        // 统一交给 GameData 的状态入口处理。
-        m_gameData->updateGlobalUnitStatus(msg);
-      }
   } else if (topic == "GlobalLogisticsStatus") {
     robomaster::GlobalLogisticsStatus msg;
     if (msg.ParseFromArray(payload.data(), payload.size())) {
@@ -1327,78 +1230,6 @@ void NetworkManager::processMqttMessage(const QString &topic,
                       {QStringLiteral("total_damage"),
                        static_cast<int>(msg.total_damage())}});
       m_gameData->updateRobotInjury(msg);
-    }
-  } else if (topic == "RobotStaticStatus") {
-    robomaster::RobotStaticStatus msg;
-    if (msg.ParseFromArray(payload.data(), payload.size())) {
-      dumpMqttEvent(
-          QStringLiteral("parsed"), topic, payload, m_gameData,
-          QStringLiteral("RobotStaticStatus robot_id=%1 connection=%2 field=%3 alive=%4")
-              .arg(msg.robot_id())
-              .arg(msg.connection_state())
-              .arg(msg.field_state())
-              .arg(msg.alive_state()),
-          QJsonObject{{QStringLiteral("robot_id"),
-                       static_cast<int>(msg.robot_id())},
-                      {QStringLiteral("robot_type"),
-                       static_cast<int>(msg.robot_type())},
-                      {QStringLiteral("connection_state"),
-                       static_cast<int>(msg.connection_state())},
-                      {QStringLiteral("field_state"),
-                       static_cast<int>(msg.field_state())},
-                      {QStringLiteral("alive_state"),
-                       static_cast<int>(msg.alive_state())},
-                      {QStringLiteral("level"),
-                       static_cast<int>(msg.level())}});
-      qInfo().noquote()
-          << QStringLiteral("[RobotStaticStatus] robot_id=%1 type=%2 "
-                            "conn=%3 field=%4 alive=%5 "
-                            "perf_shooter=%6 perf_chassis=%7 "
-                            "level=%8 max_hp=%9 max_heat=%10 cool_rate=%11 "
-                            "max_power=%12 max_buf_energy=%13 max_chassis_energy=%14")
-                 .arg(msg.robot_id()).arg(msg.robot_type())
-                 .arg(msg.connection_state()).arg(msg.field_state())
-                 .arg(msg.alive_state()).arg(msg.performance_system_shooter())
-                 .arg(msg.performance_system_chassis()).arg(msg.level())
-                 .arg(msg.max_health()).arg(msg.max_heat())
-                 .arg(msg.heat_cooldown_rate()).arg(msg.max_power())
-                 .arg(msg.max_buffer_energy()).arg(msg.max_chassis_energy());
-      m_gameData->updateRobotStaticStatus(msg);
-    }
-  } else if (topic == "RobotDynamicStatus") {
-    robomaster::RobotDynamicStatus msg;
-    if (msg.ParseFromArray(payload.data(), payload.size())) {
-      dumpMqttEvent(
-          QStringLiteral("parsed"), topic, payload, m_gameData,
-          QStringLiteral("RobotDynamicStatus has_no_robot_id current_health=%1 remaining_ammo=%2")
-              .arg(msg.current_health())
-              .arg(msg.remaining_ammo()),
-          QJsonObject{{QStringLiteral("protocol_has_robot_id"), false},
-                      {QStringLiteral("current_health"),
-                       static_cast<int>(msg.current_health())},
-                      {QStringLiteral("current_heat"), msg.current_heat()},
-                      {QStringLiteral("remaining_ammo"),
-                       static_cast<int>(msg.remaining_ammo())},
-                      {QStringLiteral("can_remote_heal"),
-                       msg.can_remote_heal()},
-                      {QStringLiteral("can_remote_ammo"),
-                       msg.can_remote_ammo()}});
-      qInfo().noquote()
-          << QStringLiteral("[RobotDynamicStatus] hp=%1 heat=%2 fire_rate=%3 "
-                            "chassis_energy=%4 buf_energy=%5 "
-                            "exp=%6 exp_up=%7 fired=%8 ammo=%9 "
-                            "out_of_combat=%10 combat_countdown=%11 "
-                            "remote_heal=%12 remote_ammo=%13")
-                 .arg(msg.current_health()).arg(msg.current_heat())
-                 .arg(msg.last_projectile_fire_rate())
-                 .arg(msg.current_chassis_energy())
-                 .arg(msg.current_buffer_energy())
-                 .arg(msg.current_experience()).arg(msg.experience_for_upgrade())
-                 .arg(msg.total_projectiles_fired()).arg(msg.remaining_ammo())
-                 .arg(msg.is_out_of_combat())
-                 .arg(msg.out_of_combat_countdown())
-                 .arg(msg.can_remote_heal()).arg(msg.can_remote_ammo());
-      m_gameData->updateRobotDynamicStatus(msg);
     }
   } else if (topic == "RobotPosition") {
     robomaster::RobotPosition msg;

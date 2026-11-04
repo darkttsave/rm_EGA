@@ -40,6 +40,8 @@
 #include "MqttManager.h" // MQTT 客户端管理器
 #endif
 
+class TestOfficialMessageHandler;
+
 namespace RM {
 
 /**
@@ -378,6 +380,7 @@ private slots:
   void onReadyRead();
 
 private:
+  friend class ::TestOfficialMessageHandler;
   // --- 私有成员 ---
 
   QUdpSocket *m_udpSocket; ///< UDP 套接字实例
