@@ -17,7 +17,6 @@
 #include <QDir>
 #include <QEvent>
 #include <QFileInfo>
-#include <QHttpHeaders>
 #include <QHttpServer>
 #include <QHttpServerRequest>
 #include <QHttpServerResponse>
@@ -29,16 +28,14 @@
 
 namespace {
 
+// Qt 6.4 尚未提供 QHttpHeaders（6.7 起引入），因此改用 QHttpServerResponse 的
+// (mimeType, data, statusCode) 构造函数直接声明 Content-Type: application/json。
 QHttpServerResponse jsonResponse(const QJsonObject &obj, int statusCode = 200) {
   const QByteArray data =
       QJsonDocument(obj).toJson(QJsonDocument::Compact);
-  QHttpServerResponse response(
-      data, QHttpServerResponder::StatusCode(statusCode));
-  QHttpHeaders headers;
-  headers.append(QHttpHeaders::WellKnownHeader::ContentType,
-                 "application/json");
-  response.setHeaders(headers);
-  return response;
+  return QHttpServerResponse(
+      QByteArrayLiteral("application/json"), data,
+      static_cast<QHttpServerResponse::StatusCode>(statusCode));
 }
 
 QHttpServerResponse jsonError(const QString &message, int statusCode = 400) {
@@ -123,7 +120,14 @@ bool ClientDevHooks::start() {
     return false;
   }
 
+  // Qt 6.8 起 QAbstractHttpServer::bind() 返回 bool；更早版本返回 void，
+  // 此时绑定结果以 tcpServer 的监听状态为准。
+#if QT_VERSION >= QT_VERSION_CHECK(6, 8, 0)
   if (!m_httpServer->bind(tcpServer)) {
+#else
+  m_httpServer->bind(tcpServer);
+  if (!tcpServer->isListening()) {
+#endif
     qWarning() << "[ClientDevHooks] Failed to bind HTTP server";
     delete tcpServer;
     return false;
