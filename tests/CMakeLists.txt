@@ -114,6 +114,10 @@ add_executable(test_timed_event_rules unit/test_timed_event_rules.cpp)
 target_link_libraries(test_timed_event_rules PRIVATE Qt6::Core Qt6::Test RoboMasterClientLib)
 rm26_add_qt_test(TestTimedEventRules test_timed_event_rules)
 
+add_executable(test_official_message_handler unit/test_official_message_handler.cpp)
+target_link_libraries(test_official_message_handler PRIVATE Qt6::Core Qt6::Test RoboMasterClientLib protobuf::libprotobuf)
+rm26_add_qt_test(TestOfficialMessageHandler test_official_message_handler)
+
 # MQTT 管理器测试
 add_executable(test_mqtt_manager unit/test_mqtt_manager.cpp)
 target_link_libraries(test_mqtt_manager PRIVATE Qt6::Core Qt6::Test RoboMasterClientLib)

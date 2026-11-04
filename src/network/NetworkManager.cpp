@@ -16,6 +16,7 @@
 #include "../core/LogFileNaming.h"
 #include "../config/ConfigManager.h" // 配置管理器，获取服务器 IP 和端口
 #include "MqttLogger.h"
+#include "OfficialMessageHandler.h"
 #include "robomaster.pb.h" // Protobuf 生成的消息类
 #include <QCoreApplication>
 #include <QDebug>                    // Qt 调试输出
@@ -1176,8 +1177,17 @@ void NetworkManager::processMqttMessage(const QString &topic,
   }
   dumpMqttEvent(QStringLiteral("received"), topic, payload, m_gameData);
 
+  const auto officialResult = OfficialMessageHandler::handle(
+      topic, payload, *m_gameData,
+      [&](const QString &detail, const QJsonObject &fields) {
+        dumpMqttEvent(QStringLiteral("parsed"), topic, payload, m_gameData,
+                      detail, fields);
+      });
+
   // 根据 Topic 解析对应的 Protobuf 消息
-  if (topic == "GameStatus") {
+  if (officialResult != OfficialMessageHandler::Result::Unsupported) {
+    // 已由官方消息处理模块处理，仍执行下面的公共收尾。
+  } else if (topic == "GameStatus") {
     robomaster::GameStatus msg;
     if (msg.ParseFromArray(payload.data(), payload.size())) {
       const auto stage =
@@ -1304,11 +1314,6 @@ void NetworkManager::processMqttMessage(const QString &topic,
       m_gameData->updateGameState(gameInfo);
       m_gameData->updateGlobalLogisticsStatus(msg);
     }
-  } else if (topic == "GlobalSpecialMechanism") {
-    robomaster::GlobalSpecialMechanism msg;
-    if (msg.ParseFromArray(payload.data(), payload.size())) {
-      m_gameData->updateGlobalSpecialMechanism(msg);
-    }
   } else if (topic == "RobotInjuryStat") {
     robomaster::RobotInjuryStat msg;
     if (msg.ParseFromArray(payload.data(), payload.size())) {
@@ -1428,23 +1433,6 @@ void NetworkManager::processMqttMessage(const QString &topic,
       robomaster::RoboMasterMessage wrapper;
       *wrapper.mutable_event() = msg;
       m_gameData->processProtocolData(wrapper);
-    }
-  } else if (topic == "Buff") {
-    robomaster::Buff msg;
-    if (msg.ParseFromArray(payload.data(), payload.size())) {
-      dumpMqttEvent(
-          QStringLiteral("parsed"), topic, payload, m_gameData,
-          QStringLiteral("Buff robot_id=%1 buff_type=%2 buff_level=%3")
-              .arg(msg.robot_id())
-              .arg(msg.buff_type())
-              .arg(msg.buff_level()),
-          QJsonObject{{QStringLiteral("robot_id"),
-                       static_cast<int>(msg.robot_id())},
-                      {QStringLiteral("buff_type"),
-                       static_cast<int>(msg.buff_type())},
-                      {QStringLiteral("buff_level"),
-                       static_cast<int>(msg.buff_level())}});
-      m_gameData->updateBuff(msg);
     }
   } else if (topic == "RobotModuleStatus") {
     robomaster::RobotModuleStatus msg;
@@ -1671,16 +1659,6 @@ void NetworkManager::processMqttMessage(const QString &topic,
                       {QStringLiteral("shooter_status"),
                        static_cast<int>(msg.shooter_status())}});
       m_gameData->updateAirSupportStatusSync(msg);
-    }
-  } else if (topic == "DeployModeStatusSync") {
-    robomaster::DeployModeStatusSync msg;
-    if (msg.ParseFromArray(payload.data(), payload.size())) {
-      dumpMqttEvent(
-          QStringLiteral("parsed"), topic, payload, m_gameData,
-          QStringLiteral("DeployModeStatusSync status=%1").arg(msg.status()),
-          QJsonObject{{QStringLiteral("status"),
-                       static_cast<int>(msg.status())}});
-      m_gameData->updateDeployModeStatusSync(msg);
     }
   }
 
