@@ -464,6 +464,9 @@ private:
   bool m_helpOverlayHotkeyActive = false;             // F12 是否正在按住
 
   // --- QML 面板 (按键触发) ---
+  QQuickWidget *m_rm27DevPanel = nullptr;
+  bool m_rm27DevShortcutDown = false;
+  void toggleRM27DevPanel();
   QQuickWidget *m_qmlTabPanel = nullptr;       // [Tab] 机器人数据统计面板
   QQuickWidget *m_qmlDamagePanel = nullptr;    // [~] 伤害数据统计面板
   QQuickWidget *m_qmlSettingsPanel = nullptr;  // 设置面板

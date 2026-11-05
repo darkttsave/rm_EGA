@@ -41,6 +41,88 @@ private slots:
     Q_CLEANUP_RESOURCE(qml);
   }
 
+  void testRM27DevPanelGatingAndLiveData() {
+    qunsetenv("RM_DEVTOOLS");
+    {
+      RM::MainWindow window;
+      window.show();
+      auto *network = window.findChild<RM::NetworkManager *>();
+      QVERIFY(network);
+      QVERIFY(QMetaObject::invokeMethod(&window, "onSettingsLoginRequested",
+                                       Qt::DirectConnection,
+                                       Q_ARG(QString, QStringLiteral("R1 - Hero"))));
+      QTest::keyClick(window.centralWidget(), Qt::Key_T, Qt::ControlModifier);
+      QKeyEvent ctrlDown(QEvent::KeyPress, Qt::Key_Control, Qt::ControlModifier);
+      QApplication::sendEvent(window.centralWidget(), &ctrlDown);
+      QTRY_VERIFY_WITH_TIMEOUT(network->lastKeyboardMouseControlAttemptMs() > 0, 1000);
+      QKeyEvent ctrlUp(QEvent::KeyRelease, Qt::Key_Control, Qt::NoModifier);
+      QApplication::sendEvent(window.centralWidget(), &ctrlUp);
+      QTest::keyClick(window.centralWidget(), Qt::Key_F10,
+                      Qt::ControlModifier | Qt::ShiftModifier);
+      QVERIFY(!window.findChild<QQuickWidget *>(QStringLiteral("rm27DevPanel")));
+    }
+    qputenv("RM_DEVTOOLS", "1");
+    {
+      RM::MainWindow window;
+      window.resize(1000, 700);
+      window.show();
+      auto *data = window.findChild<GameData *>();
+      auto *network = window.findChild<RM::NetworkManager *>();
+      QVERIFY(data); QVERIFY(network);
+      QVERIFY(QMetaObject::invokeMethod(&window, "onSettingsLoginRequested",
+                                       Qt::DirectConnection,
+                                       Q_ARG(QString, QStringLiteral("R1 - Hero"))));
+      QTest::keyClick(window.centralWidget(), Qt::Key_T, Qt::ControlModifier);
+      QKeyEvent ctrlDown(QEvent::KeyPress, Qt::Key_Control, Qt::ControlModifier);
+      QApplication::sendEvent(window.centralWidget(), &ctrlDown);
+      QTest::qWait(30);
+      QKeyEvent shiftDown(QEvent::KeyPress, Qt::Key_Shift,
+                          Qt::ControlModifier | Qt::ShiftModifier);
+      QApplication::sendEvent(window.centralWidget(), &shiftDown);
+      QTest::qWait(30);
+      QCOMPARE(network->lastKeyboardMouseControlAttemptMs(), qint64(0));
+      QTest::keyClick(window.centralWidget(), Qt::Key_F10,
+                      Qt::ControlModifier | Qt::ShiftModifier);
+      auto *panel = window.findChild<QQuickWidget *>(QStringLiteral("rm27DevPanel"));
+      QVERIFY(panel);
+      QVERIFY(panel->isVisible());
+      QCOMPARE(panel->geometry(), window.rect());
+      QCOMPARE(panel->status(), QQuickWidget::Ready);
+      QWidget competingOverlay(&window);
+      competingOverlay.show();
+      competingOverlay.raise();
+      QTRY_VERIFY(childStackIndex(&window, panel) > childStackIndex(&window, &competingOverlay));
+      auto *root = panel->rootObject();
+      QVERIFY(root);
+      auto *score = root->findChild<QObject *>(QStringLiteral("rm27Scores"));
+      auto *state = root->findChild<QObject *>(QStringLiteral("rm27GameState"));
+      auto *robot = root->findChild<QObject *>(QStringLiteral("rm27CurrentRobot"));
+      QVERIFY(score); QVERIFY(state); QVERIFY(robot);
+      data->setCurrentRobotId(3);
+      data->updateGameStateFromS1(4, 237, 42, 19, 1, true);
+      robomaster::RobotStatus status;
+      status.set_id(3); status.set_hp(345); status.set_max_hp(500);
+      data->updateRobotData(status);
+      QTRY_VERIFY(score->property("text").toString().contains("42"));
+      QVERIFY(score->property("text").toString().contains("19"));
+      QTRY_VERIFY(state->property("text").toString().contains("237"));
+      QTRY_VERIFY(robot->property("text").toString().contains("345/500"));
+      const bool mapMode = window.tacticalLargeMapMode();
+      QTest::keyClick(panel, Qt::Key_M);
+      QCOMPARE(window.tacticalLargeMapMode(), mapMode);
+      QCOMPARE(network->lastKeyboardMouseControlAttemptMs(), qint64(0));
+      QTest::keyClick(panel, Qt::Key_Escape);
+      QVERIFY(!panel->isVisible());
+      QTest::keyClick(window.centralWidget(), Qt::Key_F10,
+                      Qt::ControlModifier | Qt::ShiftModifier);
+      QVERIFY(panel->isVisible());
+      QTest::keyClick(panel, Qt::Key_F10,
+                      Qt::ControlModifier | Qt::ShiftModifier);
+      QVERIFY(!panel->isVisible());
+    }
+    qunsetenv("RM_DEVTOOLS");
+  }
+
   void testTacticalMapStartsLargeAndMIsScoped() {
     // MainWindow 使用零延时 single-shot 延后启动服务。保持本测试同步执行，
     // 这样只覆盖 UI 路由，不启动网络、模拟器和视频服务。

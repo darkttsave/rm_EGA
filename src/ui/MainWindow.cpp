@@ -1959,6 +1959,8 @@ void MainWindow::restackOverlayLayers() {
   }
   ensureGameResultRaisedIfVisible();
   ensureInteractivePanelsRaisedIfVisible();
+  if (m_rm27DevPanel && m_rm27DevPanel->isVisible())
+    m_rm27DevPanel->raise();
 }
 
 QWidget *MainWindow::topInteractivePanel() const {
@@ -1998,6 +2000,10 @@ void MainWindow::ensureInteractivePanelsRaisedIfVisible() {
       return;
     }
     panel->raise();
+    if (m_rm27DevPanel && m_rm27DevPanel->isVisible()) {
+      m_rm27DevPanel->raise();
+      return;
+    }
     if (panel == m_qmlSettingsPanel || panel == m_qmlExchangePanel ||
         panel == m_qmlAmmoSupply17Panel || panel == m_qmlAmmoSupply42Panel ||
         panel == m_qmlTabPanel ||
@@ -5155,6 +5161,9 @@ void MainWindow::setupKeyboardMouseControlTimer() {
 }
 
 bool MainWindow::canUseKeyboardMouseControl() const {
+  // Developer mode reserves Ctrl+Shift+F10; its modifiers are robot keys.
+  // Disable remote keyboard/mouse control for the entire developer session.
+  if (qgetenv("RM_DEVTOOLS") == "1") return false;
   return m_networkManager && RM::InputHotkeyPolicy::canUseKeyboardMouseControl(
                                  m_exchangeHintLoginActive, m_tacticalMode);
 }
@@ -5164,7 +5173,7 @@ bool MainWindow::isKeyboardMouseControlBlocked() const {
     return widget && widget->isVisible();
   };
 
-  if (visible(m_qmlSettingsPanel) || visible(m_qmlExchangePanel) ||
+  if (visible(m_rm27DevPanel) || visible(m_qmlSettingsPanel) || visible(m_qmlExchangePanel) ||
       visible(m_qmlAmmoSupply17Panel) || visible(m_qmlAmmoSupply42Panel) ||
       visible(m_qmlTabPanel) ||
       visible(m_qmlDamagePanel) || visible(m_miniMapLarge) ||
@@ -6615,8 +6624,73 @@ void MainWindow::updateSiloPanelVisibility() {
   }
 }
 
+void MainWindow::toggleRM27DevPanel() {
+  if (qgetenv("RM_DEVTOOLS") != "1") return;
+  if (!m_rm27DevPanel) {
+    m_rm27DevPanel = new QQuickWidget(this);
+    m_rm27DevPanel->setObjectName(QStringLiteral("rm27DevPanel"));
+    m_rm27DevPanel->setResizeMode(QQuickWidget::SizeRootObjectToView);
+    m_rm27DevPanel->rootContext()->setContextProperty("gameData", m_gameData);
+    m_rm27DevPanel->setSource(QUrl(QStringLiteral("qrc:/qml/RM27DevPanel.qml")));
+    if (m_rm27DevPanel->status() != QQuickWidget::Ready) {
+      qWarning() << "RM27 developer panel failed to load" << m_rm27DevPanel->errors();
+      delete m_rm27DevPanel;
+      m_rm27DevPanel = nullptr;
+      return;
+    }
+    m_rm27DevPanel->hide();
+  }
+  if (m_rm27DevPanel->isVisible()) {
+    m_rm27DevPanel->rootObject()->setProperty("panelActive", false);
+    m_rm27DevPanel->hide();
+    setFocus(Qt::OtherFocusReason);
+  } else {
+    resetKeyboardMouseControlState(true);
+    m_rm27DevPanel->setGeometry(rect());
+    m_rm27DevPanel->rootObject()->setProperty("panelActive", true);
+    m_rm27DevPanel->show();
+    m_rm27DevPanel->raise();
+    m_rm27DevPanel->setFocus(Qt::OtherFocusReason);
+  }
+}
+
 // --- 全局事件过滤器 - 替代 event() 和 keyPressEvent() 处理全局快捷键 ---
 bool MainWindow::eventFilter(QObject *obj, QEvent *event) {
+  if ((event->type() == QEvent::ZOrderChange || event->type() == QEvent::Show) &&
+      m_rm27DevPanel &&
+      m_rm27DevPanel->isVisible() && obj != m_rm27DevPanel) {
+    auto *widget = qobject_cast<QWidget *>(obj);
+    if (widget && widget->parentWidget() == this) {
+      QTimer::singleShot(0, this, [this] {
+        if (m_rm27DevPanel && m_rm27DevPanel->isVisible())
+          m_rm27DevPanel->raise();
+      });
+    }
+  }
+  if (isInputEventFromClientWindow(obj) &&
+      (event->type() == QEvent::ShortcutOverride ||
+       event->type() == QEvent::KeyPress || event->type() == QEvent::KeyRelease)) {
+    auto *key = static_cast<QKeyEvent *>(event);
+    const bool chord = qgetenv("RM_DEVTOOLS") == "1" && key->key() == Qt::Key_F10 &&
+        key->modifiers() == (Qt::ControlModifier | Qt::ShiftModifier);
+    const bool panelVisible = m_rm27DevPanel && m_rm27DevPanel->isVisible();
+    if (chord || (key->key() == Qt::Key_F10 && m_rm27DevShortcutDown)) {
+      if (event->type() == QEvent::KeyPress && !key->isAutoRepeat()) {
+        m_rm27DevShortcutDown = true;
+        toggleRM27DevPanel();
+      } else if (event->type() == QEvent::KeyRelease && !key->isAutoRepeat()) {
+        m_rm27DevShortcutDown = false;
+      }
+      event->accept();
+      return true;
+    }
+    if (panelVisible) {
+      if (key->key() == Qt::Key_Escape && event->type() == QEvent::KeyPress && !key->isAutoRepeat())
+        toggleRM27DevPanel();
+      event->accept();
+      return true;
+    }
+  }
   if (event->type() == QEvent::Show) {
     if (QWidget *widget = qobject_cast<QWidget *>(obj);
         widget && isInputEventFromClientWindow(widget)) {
@@ -7960,6 +8034,10 @@ void MainWindow::resizeEvent(QResizeEvent *event) {
   }
 
   updateExchangeHintOverlayGeometry();
+  if (m_rm27DevPanel) {
+    m_rm27DevPanel->setGeometry(rect());
+    if (m_rm27DevPanel->isVisible()) m_rm27DevPanel->raise();
+  }
 
   if (m_leftBottomPanel) {
     if (m_leftSideArea) {

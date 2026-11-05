@@ -1,6 +1,7 @@
 <!DOCTYPE RCC>
 <RCC version="1.0">
     <qresource prefix="/qml">
+        <file>RM27DevPanel.qml</file>
         <file>BaseHealthBar.qml</file>
         <file>FpsDisplay.qml</file>
         <file>DamagePanel.qml</file>

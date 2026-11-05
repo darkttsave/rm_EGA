@@ -1,0 +1,75 @@
+// SPDX-License-Identifier: MIT
+import QtQuick
+import QtQuick.Controls
+
+Rectangle {
+    id: root
+    objectName: "rm27DevPanelRoot"
+    color: "#101923"
+    property bool panelActive: false
+    property int revision: 0
+    property var dataSource: gameData
+
+    // Re-read GameData, including updates that do not carry a dedicated QML notify.
+    Timer { interval: 250; running: root.panelActive; repeat: true; onTriggered: root.revision++ }
+    Connections {
+        target: root.dataSource
+        function onRobotDataUpdated() { root.revision++ }
+        function onMyRobotUpdated() { root.revision++ }
+        function onDataChanged() { root.revision++ }
+    }
+    ScrollView {
+        anchors.fill: parent
+        clip: true
+        contentWidth: availableWidth
+        Column {
+            width: Math.max(300, root.width - 64)
+            x: 32
+            spacing: 14
+            Text { text: "RM27 开发者状态面板"; color: "white"; font.pixelSize: 28; topPadding: 20 }
+            Text { text: "Ctrl+Shift+F10 或 Esc 关闭 · 键鼠机器人控制已禁用 · GameData（2026 语义）"; color: "#a8c4d8"; font.pixelSize: 16 }
+            Text {
+                objectName: "rm27GameState"
+                color: "white"; font.pixelSize: 20
+                width: parent.width; wrapMode: Text.Wrap
+                text: !root.dataSource ? "" : "阶段: " + gameData.gamePhase + "    剩余: " + gameData.remainingTime + " 秒    暂停: " + (gameData.is_paused ? "是" : "否") + "    局数: " + gameData.currentRound
+            }
+            Text {
+                objectName: "rm27Scores"
+                color: "white"; font.pixelSize: 20
+                width: parent.width; wrapMode: Text.Wrap
+                text: !root.dataSource ? "" : "得分  红: " + gameData.redScore + "    蓝: " + gameData.blueScore + "    当前机器人 ID: " + gameData.currentRobotId
+            }
+            Text {
+                objectName: "rm27Bases"
+                color: "white"; font.pixelSize: 19
+                width: parent.width; wrapMode: Text.Wrap
+                text: !root.dataSource ? "" : "基地  红: " + gameData.redBaseHealth + "/" + gameData.redBaseMaxHealth + " (无敌: " + gameData.redBaseInvincible + ")    蓝: " + gameData.blueBaseHealth + "/" + gameData.blueBaseMaxHealth + " (无敌: " + gameData.blueBaseInvincible + ")"
+            }
+            Text {
+                objectName: "rm27Outposts"
+                color: "white"; font.pixelSize: 19
+                width: parent.width; wrapMode: Text.Wrap
+                text: !root.dataSource ? "" : "前哨站  红: " + gameData.redOutpostHealth + "/" + gameData.redOutpostMaxHealth + " (摧毁: " + gameData.redOutpostDestroyed + ")    蓝: " + gameData.blueOutpostHealth + "/" + gameData.blueOutpostMaxHealth + " (摧毁: " + gameData.blueOutpostDestroyed + ")"
+            }
+            Text {
+                objectName: "rm27CurrentRobot"
+                property var robot: { root.revision; return root.dataSource ? root.dataSource.getRobotInfo(root.dataSource.currentRobotId) : ({}) }
+                color: "white"; font.pixelSize: 19
+                text: "当前机器人血量: " + (robot.hp === undefined ? "未知" : robot.hp + "/" + robot.maxHp)
+            }
+            Text { text: "机器人状态（实际 GameData 值）"; color: "#8de0ff"; font.pixelSize: 21; topPadding: 10 }
+            Repeater {
+                model: [1, 2, 3, 4, 6, 7, 101, 102, 103, 104, 106, 107]
+                delegate: Text {
+                    required property int modelData
+                    objectName: "rm27Robot" + modelData
+                    property var robot: { root.revision; return root.dataSource ? root.dataSource.getRobotInfo(modelData) : ({}) }
+                    color: "white"; font.pixelSize: 18
+                    text: "ID " + modelData + "    血量: " + (robot.hp === undefined ? "未知" : robot.hp + "/" + robot.maxHp) + "    离线: " + (robot.isOffline === undefined ? "未知" : robot.isOffline)
+                }
+            }
+            Text { text: "2027 控制度 / 阵地控制状态：未接入"; color: "#ffca7a"; font.pixelSize: 20; topPadding: 12; bottomPadding: 32 }
+        }
+    }
+}
