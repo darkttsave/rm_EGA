@@ -35,6 +35,20 @@ OfficialMessageHandler::Result OfficialMessageHandler::handle(
     gameData.updateGameStatus(msg);
     return Result::Parsed;
   }
+  if (topic == QLatin1String("Event")) {
+    robomaster::Event msg;
+    if (!msg.ParseFromArray(payload.data(), payload.size()))
+      return Result::ParseFailed;
+    if (logger)
+      logger(QStringLiteral("Event event_id=%1 param=%2")
+                 .arg(msg.event_id()).arg(QString::fromStdString(msg.param())),
+             {{QStringLiteral("event_id"), static_cast<int>(msg.event_id())},
+              {QStringLiteral("param"), QString::fromStdString(msg.param())}});
+    robomaster::RoboMasterMessage wrapper;
+    *wrapper.mutable_event() = msg;
+    gameData.processProtocolData(wrapper);
+    return Result::Parsed;
+  }
   if (topic == QLatin1String("GlobalSpecialMechanism")) {
     robomaster::GlobalSpecialMechanism msg;
     if (!msg.ParseFromArray(payload.data(), payload.size()))

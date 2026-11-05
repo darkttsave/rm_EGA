@@ -4041,6 +4041,9 @@ void GameData::processProtocolData(
       // V1.3.0: 14=飞镖命中，15=双方飞镖闸门开启。
       // 两者均不是工程装配结果，不得修改 TechCore 状态。
       eventInfo(evt);
+    } else if (eventId == 16) {
+      m_event16LastReceivedAt = QDateTime::currentDateTime();
+      emit event16ReceivedChanged();
     } else if (eventId == 100) {
       emit systemMessageReceived(param);
     } else if (eventId == 2000) {

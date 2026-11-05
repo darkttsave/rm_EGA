@@ -1249,22 +1249,6 @@ void NetworkManager::processMqttMessage(const QString &topic,
                       {QStringLiteral("yaw"), msg.yaw()}});
       m_gameData->updateRobotPosition(msg);
     }
-  } else if (topic == "Event") {
-    robomaster::Event msg;
-    if (msg.ParseFromArray(payload.data(), payload.size())) {
-      dumpMqttEvent(
-          QStringLiteral("parsed"), topic, payload, m_gameData,
-          QStringLiteral("Event event_id=%1 param=%2")
-              .arg(msg.event_id())
-              .arg(QString::fromStdString(msg.param())),
-          QJsonObject{{QStringLiteral("event_id"),
-                       static_cast<int>(msg.event_id())},
-                      {QStringLiteral("param"),
-                       QString::fromStdString(msg.param())}});
-      robomaster::RoboMasterMessage wrapper;
-      *wrapper.mutable_event() = msg;
-      m_gameData->processProtocolData(wrapper);
-    }
   } else if (topic == "RobotModuleStatus") {
     robomaster::RobotModuleStatus msg;
     if (msg.ParseFromArray(payload.data(), payload.size())) {

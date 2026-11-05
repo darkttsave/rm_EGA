@@ -69,6 +69,15 @@ Rectangle {
                     text: "ID " + modelData + "    血量: " + (robot.hp === undefined ? "未知" : robot.hp + "/" + robot.maxHp) + "    离线: " + (robot.isOffline === undefined ? "未知" : robot.isOffline)
                 }
             }
+            Text { text: "RMUL 装配事件观测"; color: "#8de0ff"; font.pixelSize: 21; topPadding: 12 }
+            Text {
+                objectName: "rm27Event16Status"
+                width: parent.width; wrapMode: Text.Wrap
+                color: "white"; font.pixelSize: 18
+                text: !root.dataSource ? "" : "Event 16 已收到: " + (gameData.event16Received ? "是" : "否") +
+                      "    最近接收: " + (gameData.event16Received ? Qt.formatDateTime(gameData.event16LastReceivedAt, "yyyy-MM-dd HH:mm:ss.zzz") : "无") +
+                      "\n来源: GameData 协议事件（MQTT 或兼容入口） · 当前安装状态尚未独立确认"
+            }
             Text { text: "2027 控制度 / 阵地控制状态：未接入"; color: "#ffca7a"; font.pixelSize: 20; topPadding: 12; bottomPadding: 32 }
         }
     }

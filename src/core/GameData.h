@@ -695,6 +695,10 @@ Q_PROPERTY(QVariantMap robotRespawnStatus READ robotRespawnStatus NOTIFY robotRe
   Q_PROPERTY(bool siloOnline READ siloOnline NOTIFY siloStatusChanged)
 
 
+  // Observation of Event 16 only; this is not the current installation state.
+  Q_PROPERTY(bool event16Received READ event16Received NOTIFY event16ReceivedChanged)
+  Q_PROPERTY(QDateTime event16LastReceivedAt READ event16LastReceivedAt NOTIFY event16ReceivedChanged)
+
   Q_PROPERTY(uint maximumDifficultyLevel READ maximumDifficultyLevel NOTIFY techCoreMotionStateSyncUpdated)
   Q_PROPERTY(uint techCoreBasicState READ techCoreBasicState NOTIFY techCoreMotionStateSyncUpdated)
   Q_PROPERTY(uint techCorePutinState READ techCorePutinState NOTIFY techCoreMotionStateSyncUpdated)
@@ -708,6 +712,9 @@ Q_PROPERTY(QVariantMap robotRespawnStatus READ robotRespawnStatus NOTIFY robotRe
 public:
   explicit GameData(QObject *parent = nullptr);
   ~GameData();
+
+  bool event16Received() const { return m_event16LastReceivedAt.isValid(); }
+  QDateTime event16LastReceivedAt() const { return m_event16LastReceivedAt; }
 
   // 机器人数据访问器
   const QList<RobotData> &getAllRobots() const { return m_robots; }
@@ -1376,6 +1383,7 @@ signals:
   void airSupportStatusUpdated();
   void siloStatusChanged();
   void techCoreMotionStateSyncUpdated();
+  void event16ReceivedChanged();
   void baseHealthUpdatedProxy(); // 用于 QML 的无参数信号
   void activePopupsChanged();    // 激活弹窗列表变化
   void outpostHealthUpdatedProxy();
@@ -1480,6 +1488,7 @@ private:
 
   // 0x0101 场地事件数据缓存
   quint32 m_eventData = 0;
+  QDateTime m_event16LastReceivedAt; // Local receipt time, not installation state.
   RuneData m_runeData;
   RM::RuneVoicePromptTracker m_runeVoicePromptTracker;
   int m_lastRuneStatusSyncStatus = 0;

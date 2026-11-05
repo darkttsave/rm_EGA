@@ -5,6 +5,12 @@
 #include "robomaster.pb.h"
 #include <QSignalSpy>
 #include <QJsonArray>
+#include <QQuickWidget>
+#include <QQmlContext>
+#include <QQuickItem>
+#include <QTcpServer>
+#include <QProcess>
+#include <QStandardPaths>
 #include <QtTest>
 
 using RM::OfficialMessageHandler;
@@ -132,6 +138,20 @@ private slots:
     QCOMPARE(logs, 1); QCOMPARE(remaining, quint16(250)); QCOMPARE(data.getGameTime(), 250);
   }
 #ifdef RM_HAS_MQTT
+  void networkEventDispatchOnce() {
+    GameData data;
+    RM::NetworkManager network(&data);
+    QSignalSpy signal(&data, &GameData::airSupportCountered);
+    QSignalSpy popup(&data, &GameData::officialEventPopupRequested);
+    QSignalSpy received(&network, &RM::NetworkManager::dataReceived);
+    robomaster::Event evt; evt.set_event_id(8); evt.set_param("RED");
+    network.processMqttMessage("Event", bytes(evt));
+    QCOMPARE(signal.count(), 1); QCOMPARE(popup.count(), 1);
+    QCOMPARE(received.count(), 1);
+    network.processMqttMessage("Event", QByteArray::fromHex("0880"));
+    QCOMPARE(signal.count(), 1); QCOMPARE(popup.count(), 1);
+    QCOMPARE(received.count(), 2);
+  }
   void networkCacheLogisticsAndUdpPriority() {
     GameData data;
     data.setCurrentRobotId(1);
@@ -169,6 +189,106 @@ private slots:
     network.processData(udp);
     QCOMPARE(data.getGameTime(), 250); QCOMPARE(static_cast<int>(data.getCurrentStage()), 4);
     QVERIFY(data.is_paused());
+  }
+#endif
+  void legacyEventDispatchOnce() {
+    GameData data;
+    QSignalSpy air(&data, &GameData::airSupportCountered);
+    QSignalSpy popup(&data, &GameData::officialEventPopupRequested);
+    int logs = 0;
+    auto logger = [&](const QString &detail, const QJsonObject &fields) {
+      ++logs;
+      QCOMPARE(detail, QString("Event event_id=8 param=RED"));
+      QCOMPARE(fields.value("event_id").toInt(), 8);
+      QCOMPARE(air.count(), 0);
+    };
+    robomaster::Event evt; evt.set_event_id(8); evt.set_param("RED");
+    QCOMPARE(OfficialMessageHandler::handle("Event", bytes(evt), data, logger), OfficialMessageHandler::Result::Parsed);
+    QCOMPARE(logs, 1); QCOMPARE(air.count(), 1); QCOMPARE(popup.count(), 1);
+    QCOMPARE(OfficialMessageHandler::handle("Event", QByteArray::fromHex("0880"), data, logger), OfficialMessageHandler::Result::ParseFailed);
+    QCOMPARE(logs, 1); QCOMPARE(air.count(), 1); QCOMPARE(popup.count(), 1);
+  }
+  void event16Observation() {
+    GameData data;
+    QSignalSpy observed(&data, &GameData::event16ReceivedChanged);
+    QSignalSpy popup(&data, &GameData::officialEventPopupRequested);
+    QVERIFY(!data.event16Received());
+    QVERIFY(!data.event16LastReceivedAt().isValid());
+    robomaster::Event other; other.set_event_id(17);
+    QCOMPARE(OfficialMessageHandler::handle("Event", bytes(other), data), OfficialMessageHandler::Result::Parsed);
+    QCOMPARE(OfficialMessageHandler::handle("Event", QByteArray::fromHex("081080"), data), OfficialMessageHandler::Result::ParseFailed);
+    QCOMPARE(observed.count(), 0); QVERIFY(!data.event16Received());
+    const QDateTime before = QDateTime::currentDateTime();
+    robomaster::Event event; event.set_event_id(16);
+    QCOMPARE(bytes(event).toHex(), QByteArray("0810"));
+    QCOMPARE(OfficialMessageHandler::handle("Event", bytes(event), data), OfficialMessageHandler::Result::Parsed);
+    QCOMPARE(observed.count(), 1); QVERIFY(data.event16Received());
+    QVERIFY(data.event16LastReceivedAt() >= before);
+    QVERIFY(data.event16LastReceivedAt() <= QDateTime::currentDateTime());
+    QCOMPARE(popup.count(), 0);
+    QTest::qWait(2);
+    const QDateTime first = data.event16LastReceivedAt();
+    QCOMPARE(OfficialMessageHandler::handle("Event", bytes(event), data), OfficialMessageHandler::Result::Parsed);
+    QCOMPARE(observed.count(), 2); QVERIFY(data.event16LastReceivedAt() >= first);
+    const QDateTime last = data.event16LastReceivedAt();
+    QCOMPARE(OfficialMessageHandler::handle("Event", QByteArray::fromHex("081080"), data), OfficialMessageHandler::Result::ParseFailed);
+    QCOMPARE(observed.count(), 2); QCOMPARE(data.event16LastReceivedAt(), last);
+  }
+#ifdef RM_HAS_MQTT
+  void event16ViaLocalMqttAndQml() {
+    if (QStandardPaths::findExecutable(QStringLiteral("mosquitto")).isEmpty())
+      QSKIP("mosquitto unavailable");
+    QTcpServer probe;
+    if (!probe.listen(QHostAddress::LocalHost, 0))
+      QSKIP("local listening unavailable");
+    const quint16 port = probe.serverPort();
+    probe.close();
+    QProcess broker;
+    broker.start(QStringLiteral("mosquitto"), {QStringLiteral("-p"), QString::number(port)});
+    QVERIFY(broker.waitForStarted());
+    QTest::qWait(150);
+    QVERIFY(broker.state() == QProcess::Running);
+    Q_INIT_RESOURCE(qml);
+    GameData data;
+    RM::NetworkManager network(&data);
+    QQuickWidget panel;
+    panel.rootContext()->setContextProperty("gameData", &data);
+    panel.setSource(QUrl(QStringLiteral("qrc:/qml/RM27DevPanel.qml")));
+    QCOMPARE(panel.status(), QQuickWidget::Ready);
+    QObject *display = panel.rootObject()->findChild<QObject *>(QStringLiteral("rm27Event16Status"));
+    QVERIFY(display);
+    QVERIFY(display->property("text").toString().contains(QStringLiteral("已收到: 否")));
+    QSignalSpy observed(&data, &GameData::event16ReceivedChanged);
+    QSignalSpy received(&network, &RM::NetworkManager::dataReceived);
+    const QString uri = QStringLiteral("tcp://127.0.0.1:%1").arg(port);
+    QSignalSpy connected(&network, &RM::NetworkManager::mqttConnectCompleted);
+    network.startMqtt(uri, QStringLiteral("rm-taskb1-subscriber"));
+    QTRY_VERIFY_WITH_TIMEOUT(!connected.isEmpty(), 5000);
+    QVERIFY(network.isMqttConnected());
+    MqttManager publisher;
+    QSignalSpy publisherConnected(&publisher, &MqttManager::connectCompleted);
+    publisher.connectToBrokerAsync(uri, QStringLiteral("rm-taskb1-publisher"));
+    QTRY_VERIFY_WITH_TIMEOUT(!publisherConnected.isEmpty(), 5000);
+    QVERIFY(publisher.isConnected());
+    QVERIFY(publisher.publish(QStringLiteral("Event"), QByteArray::fromHex("081080"), 1));
+    QTRY_COMPARE_WITH_TIMEOUT(received.count(), 1, 5000);
+    QCOMPARE(observed.count(), 0); QVERIFY(!data.event16Received());
+    QVERIFY(publisher.publish(QStringLiteral("Event"), QByteArray::fromHex("0811"), 1));
+    QTRY_COMPARE_WITH_TIMEOUT(received.count(), 2, 5000);
+    QCOMPARE(observed.count(), 0); QVERIFY(!data.event16Received());
+    QVERIFY(publisher.publish(QStringLiteral("Event"), QByteArray::fromHex("0810"), 1));
+    QTRY_COMPARE_WITH_TIMEOUT(observed.count(), 1, 5000);
+    QTRY_VERIFY_WITH_TIMEOUT(display->property("text").toString().contains(QStringLiteral("已收到: 是")), 5000);
+    QVERIFY(data.event16LastReceivedAt().isValid());
+    QVERIFY(display->property("text").toString().contains(
+        data.event16LastReceivedAt().toString(QStringLiteral("yyyy-MM-dd HH:mm:ss.zzz"))));
+    QVERIFY(display->property("text").toString().contains(QStringLiteral("尚未独立确认")));
+    QTest::qWait(100);
+    QCOMPARE(observed.count(), 1); QCOMPARE(received.count(), 3);
+    network.stopMqtt();
+    publisher.disconnect();
+    broker.terminate();
+    QVERIFY(broker.waitForFinished(5000));
   }
 #endif
   void malformedAndUnsupported() {
