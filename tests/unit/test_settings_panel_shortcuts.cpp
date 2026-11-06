@@ -27,27 +27,15 @@ private slots:
     QScopedPointer<QObject> panel(component.create());
     QVERIFY2(panel, qPrintable(component.errorString()));
 
-    const QStringList robotTypes{
-        QStringLiteral("R1 - Hero"),     QStringLiteral("R2 - Engineer"),
-        QStringLiteral("R3 - Standard"), QStringLiteral("R4 - Standard"),
-        QStringLiteral("R6 - Aerial"),   QStringLiteral("B1 - Hero"),
-        QStringLiteral("B2 - Engineer"), QStringLiteral("B3 - Standard"),
-        QStringLiteral("B4 - Standard"), QStringLiteral("B6 - Aerial"),
-    };
-
-    for (const QString &robotType : robotTypes) {
+    const QList<int> robotIds{1, 3, 7, 101, 103, 107};
+    for (int robotId : robotIds) {
       QVariant handled;
-      const bool invoked = QMetaObject::invokeMethod(
-          panel.data(), "selectRobotByShortcut",
-          Q_RETURN_ARG(QVariant, handled),
-          Q_ARG(QVariant, QVariant(robotType)));
-      QVERIFY2(invoked, qPrintable(robotType));
-      QVERIFY2(handled.toBool(), qPrintable(robotType));
-      QCOMPARE(panel->property("currentRobotSelection").toString(), robotType);
+      QVERIFY(QMetaObject::invokeMethod(panel.data(), "selectRobotByShortcut",
+                                        Q_RETURN_ARG(QVariant, handled),
+                                        Q_ARG(QVariant, QVariant(robotId))));
+      QVERIFY(handled.toBool());
       QVERIFY(panel->property("robotShortcutPending").toBool());
-
-      QVERIFY(QMetaObject::invokeMethod(panel.data(),
-                                        "clearRobotShortcutSelection"));
+      QVERIFY(QMetaObject::invokeMethod(panel.data(), "clearRobotShortcutSelection"));
       QVERIFY(!panel->property("robotShortcutPending").toBool());
     }
 
@@ -57,7 +45,7 @@ private slots:
     QVERIFY(QMetaObject::invokeMethod(
         panel.data(), "selectRobotByShortcut",
         Q_RETURN_ARG(QVariant, invalidHandled),
-        Q_ARG(QVariant, QVariant(QStringLiteral("B7 - Sentry")))));
+        Q_ARG(QVariant, QVariant(102))));
     QVERIFY(!invalidHandled.toBool());
     QCOMPARE(panel->property("currentRobotSelection").toString(),
              selectionBeforeInvalid);
@@ -72,7 +60,7 @@ private slots:
 
     QScopedPointer<QObject> panel(component.create());
     QVERIFY2(panel, qPrintable(component.errorString()));
-    QSignalSpy loginSpy(panel.data(), SIGNAL(loginRequested(QString)));
+    QSignalSpy loginSpy(panel.data(), SIGNAL(loginRequested(int)));
     QSignalSpy logoutSpy(panel.data(), SIGNAL(logoutRequested()));
     QVERIFY(loginSpy.isValid());
     QVERIFY(logoutSpy.isValid());
@@ -89,7 +77,7 @@ private slots:
     QVERIFY(QMetaObject::invokeMethod(
         panel.data(), "selectRobotByShortcut",
         Q_RETURN_ARG(QVariant, selectionHandled),
-        Q_ARG(QVariant, QVariant(QStringLiteral("B6 - Aerial")))));
+        Q_ARG(QVariant, QVariant(107))));
     QVERIFY(selectionHandled.toBool());
 
     // 即使已有活动机器人，数字键 + Enter 仍走现有登录槽完成身份切换；
@@ -101,8 +89,7 @@ private slots:
         Q_RETURN_ARG(QVariant, loginHandled)));
     QVERIFY(loginHandled.toBool());
     QCOMPARE(loginSpy.count(), 1);
-    QCOMPARE(loginSpy.takeFirst().at(0).toString(),
-             QStringLiteral("B6 - Aerial"));
+    QCOMPARE(loginSpy.takeFirst().at(0).toInt(), 107);
     QCOMPARE(logoutSpy.count(), 0);
     QVERIFY(!panel->property("robotShortcutPending").toBool());
 
@@ -126,7 +113,7 @@ private slots:
     QVariant handled;
     QVERIFY(QMetaObject::invokeMethod(
         panel.data(), "selectRobotByShortcut", Q_RETURN_ARG(QVariant, handled),
-        Q_ARG(QVariant, QVariant(QStringLiteral("R1 - Hero")))));
+        Q_ARG(QVariant, QVariant(1))));
     QVERIFY(handled.toBool());
     QVERIFY(panel->property("robotShortcutPending").toBool());
 

@@ -158,7 +158,7 @@ private slots:
    * @brief 处理设置面板的登录请求
    * @param robotType 机器人类型字符串
    */
-  void onSettingsLoginRequested(const QString &robotType);
+  void onSettingsLoginRequested(int robotId);
   void onSettingsLogoutRequested();
   void onCommonCommandRequested(int commandType, int param);
 
@@ -320,13 +320,9 @@ private:
   void updateExchangeHintOverlayGeometry();
   void syncSettingsPanelState();
   void applySettingsRobotSelection(const QString &robotType, quint8 robotId);
-  quint8 resolveRobotIdFromSettingsSelection(const QString &robotType) const;
   QString settingsRobotTypeLabel(quint8 robotId) const;
-  int baseRobotIdFromSettingsType(const QString &robotType) const;  //获取settingpannel中的机器人基础id（不分红蓝方）
-  quint8 robotIdFromSettingsType(const QString &robotType) const;   //获取settingpannel中的机器人id（分红蓝方）
-  QString mqttClientIdForRobotType(const QString &robotType) const; //获取协议clientId
-  QStringList mqttClientIdCandidatesForRobotType(const QString &robotType) const; // 协议ID + 适配回退ID
-  void restartMqttForRobotType(const QString &robotType);           //重启 MQTT 连接并切换 clientId
+  QStringList mqttClientIdCandidatesForRobotId(int robotId) const;
+  void restartMqttForRobotId(int robotId);
 
   /**
    * @brief 获取自适应字体
@@ -487,7 +483,7 @@ private:
   QQuickWidget *m_qmlRunePanel = nullptr; // 大能量机关交互面板 (QML)
   QString m_exchangeQmlSource;
   QString m_selectedRobotTypeFromSettings =
-      QStringLiteral("R3 - Standard"); // SettingsPanel 最近一次选择的机器人类型
+      QString(); // 仅用于显示，不作为身份来源
 
   bool m_exchangeHintLoginActive = false; // 仅登录后显示 H 提示区
   bool m_exchangeHintVisualInitialized = false; // H 提示视觉状态缓存是否已初始化

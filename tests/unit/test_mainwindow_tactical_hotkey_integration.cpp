@@ -1,4 +1,12 @@
 #include "core/GameData.h"
+#include "config/ConfigManager.h"
+#include "network/MqttManager.h"
+#include <QProcess>
+#include <QStandardPaths>
+#include <QTcpServer>
+#include <QTemporaryDir>
+#include <QFileInfo>
+#include <QFile>
 #include "ui/MainWindow.h"
 #include "widgets/HeroVideoWidget.h"
 
@@ -26,10 +34,16 @@ int childStackIndex(QWidget *parent, QObject *child) {
 
 class TestMainWindowTacticalHotkeyIntegration : public QObject {
   Q_OBJECT
+  QTemporaryDir configDir;
 
 private slots:
   void initTestCase() {
     qputenv("RM_DISABLE_AUDIO", "1");
+    qunsetenv("RM_CLIENT_ROBOT_ID");
+    QVERIFY(configDir.isValid());
+    const QString example = QFileInfo(QStringLiteral(__FILE__)).absolutePath() + "/../../config.example.json";
+    QVERIFY(QFile::copy(example, configDir.filePath("config.json")));
+    QVERIFY(ConfigManager::instance().loadConfig(configDir.filePath("config.json")));
     qunsetenv("RM_DEVTOOLS");
     qunsetenv("RM_S1_ENGINE_HOST");
     Q_INIT_RESOURCE(qml);
@@ -41,6 +55,130 @@ private slots:
     Q_CLEANUP_RESOURCE(qml);
   }
 
+  void testIdentitySelectionAndLegacyCommandBoundaries() {
+    RM::MainWindow window;
+    auto *data = window.findChild<GameData *>();
+    auto *network = window.findChild<RM::NetworkManager *>();
+    QVERIFY(data);
+    QVERIFY(network);
+    QSignalSpy sent(network, &RM::NetworkManager::dataSent);
+    for (int id : {1, 3, 7, 101, 103, 107}) {
+      QVERIFY(QMetaObject::invokeMethod(&window, "onSettingsLoginRequested",
+                                       Qt::DirectConnection, Q_ARG(int, id)));
+      QCOMPARE(data->getCurrentRobotId(), id);
+      QCOMPARE(ConfigManager::instance().getClientRobotId(), id);
+#ifdef RM_HAS_MQTT
+      QTRY_VERIFY_WITH_TIMEOUT(!network->isMqttConnecting(), 5000);
+#endif
+    }
+    for (int id : {2, 102, 4, 201, 257}) {
+      QVERIFY(QMetaObject::invokeMethod(&window, "onSettingsLoginRequested",
+                                       Qt::DirectConnection, Q_ARG(int, id)));
+      QCOMPARE(data->getCurrentRobotId(), 107);
+      QCOMPARE(ConfigManager::instance().getClientRobotId(), 107);
+    }
+    network->sendAssemblyCommand(1, 1);
+    network->sendHeroDeployMode(1);
+    QCOMPARE(sent.count(), 0);
+    data->setCurrentRobotId(0);
+    QVERIFY(!network->sendKeyboardMouseControl(1, 2, 0, false, false, false, 1));
+    network->sendCommonCommand(6, 1);
+    QCOMPARE(sent.count(), 0);
+  }
+
+  void testInvalidConfiguredIdentityIsNotDefaulted() {
+    qputenv("RM_CLIENT_ROBOT_ID", "102");
+    {
+      RM::MainWindow window;
+      auto *data = window.findChild<GameData *>();
+      auto *network = window.findChild<RM::NetworkManager *>();
+      QVERIFY(data);
+      QVERIFY(network);
+      QCOMPARE(data->getCurrentRobotId(), 0);
+      QSignalSpy sent(network, &RM::NetworkManager::dataSent);
+      QVERIFY(!network->sendKeyboardMouseControl(1, 1, 0, false, false, false, 1));
+      network->sendCommonCommand(6, 1);
+      QCOMPARE(sent.count(), 0);
+    }
+    qunsetenv("RM_CLIENT_ROBOT_ID");
+  }
+
+  void testSelectionAndCommandSafetyWithLocalBroker() {
+#ifndef RM_HAS_MQTT
+    QSKIP("Paho MQTT unavailable");
+#else
+    if (QStandardPaths::findExecutable(QStringLiteral("mosquitto")).isEmpty()) QSKIP("mosquitto unavailable");
+    QTcpServer probe;
+    if (!probe.listen(QHostAddress::LocalHost, 0)) QSKIP("local listening unavailable");
+    const quint16 port = probe.serverPort();
+    probe.close();
+    QProcess broker;
+    broker.start(QStringLiteral("mosquitto"), {QStringLiteral("-p"), QString::number(port)});
+    QVERIFY(broker.waitForStarted());
+    QTest::qWait(150);
+    QVERIFY(broker.state() == QProcess::Running);
+    qputenv("RM_MQTT_BROKER", "127.0.0.1");
+    qputenv("RM_MQTT_PORT", QByteArray::number(port));
+    QVERIFY(ConfigManager::instance().setClientRobotId(1));
+    {
+      RM::MainWindow window;
+      auto *data = window.findChild<GameData *>();
+      auto *network = window.findChild<RM::NetworkManager *>();
+      QVERIFY(data); QVERIFY(network);
+      QTRY_VERIFY_WITH_TIMEOUT(network->isMqttConnected(), 5000);
+      auto *mqtt = network->findChild<MqttManager *>();
+      QVERIFY(mqtt);
+      QCOMPARE(mqtt->clientId(), QStringLiteral("1"));
+      auto *settings = window.findChild<QQuickWidget *>(QStringLiteral("settingsPanel"));
+      QVERIFY(settings && settings->rootObject());
+      for (int id : {3, 7, 101, 103, 107, 1, 101}) {
+        QVariant selected;
+        QVERIFY(QMetaObject::invokeMethod(settings->rootObject(), "selectRobotByShortcut",
+                                         Q_RETURN_ARG(QVariant, selected), Q_ARG(QVariant, QVariant(id))));
+        QVERIFY(selected.toBool());
+        QVariant confirmed;
+        QVERIFY(QMetaObject::invokeMethod(settings->rootObject(), "confirmRobotShortcutLogin",
+                                         Q_RETURN_ARG(QVariant, confirmed)));
+        QVERIFY(confirmed.toBool());
+        QTRY_VERIFY_WITH_TIMEOUT(network->isMqttConnected() && mqtt->clientId() == QString::number(id), 5000);
+        QTRY_COMPARE_WITH_TIMEOUT(settings->rootObject()->property("mqttIdentity").toString(), QString::number(id), 5000);
+        QCOMPARE(data->getCurrentRobotId(), id);
+        QCOMPARE(ConfigManager::instance().getClientRobotId(), id);
+      }
+      QSignalSpy sent(network, &RM::NetworkManager::dataSent);
+      network->sendAssemblyCommand(1, 1);
+      network->sendHeroDeployMode(1);
+      network->sendCommonCommand(2, 10);
+      network->sendRobotPerformanceSelection(1, 1, 0);
+      QCOMPARE(sent.count(), 0);
+      network->sendCommonCommand(6, 1);
+      QCOMPARE(sent.count(), 1);
+      data->setCurrentRobotId(0);
+      network->sendCommonCommand(6, 1);
+      QVERIFY(!network->sendKeyboardMouseControl(1, 0, 0, false, false, false, 1));
+      QCOMPARE(sent.count(), 1);
+      data->setCurrentRobotId(1); // 有效但与 MQTT 身份 101 不同，也不能发送。
+      network->sendCommonCommand(6, 1);
+      QCOMPARE(sent.count(), 1);
+    }
+    {
+      RM::MainWindow restored;
+      auto *data = restored.findChild<GameData *>();
+      auto *network = restored.findChild<RM::NetworkManager *>();
+      QVERIFY(data); QVERIFY(network);
+      QCOMPARE(data->getCurrentRobotId(), 101);
+      QTRY_VERIFY_WITH_TIMEOUT(network->isMqttConnected(), 5000);
+      auto *mqtt = network->findChild<MqttManager *>();
+      QVERIFY(mqtt);
+      QCOMPARE(mqtt->clientId(), QStringLiteral("101"));
+    }
+    qunsetenv("RM_MQTT_BROKER");
+    qunsetenv("RM_MQTT_PORT");
+    broker.terminate();
+    QVERIFY(broker.waitForFinished(5000));
+#endif
+  }
+
   void testRM27DevPanelGatingAndLiveData() {
     qunsetenv("RM_DEVTOOLS");
     {
@@ -50,7 +188,7 @@ private slots:
       QVERIFY(network);
       QVERIFY(QMetaObject::invokeMethod(&window, "onSettingsLoginRequested",
                                        Qt::DirectConnection,
-                                       Q_ARG(QString, QStringLiteral("R1 - Hero"))));
+                                       Q_ARG(int, 1)));
       QTest::keyClick(window.centralWidget(), Qt::Key_T, Qt::ControlModifier);
       QKeyEvent ctrlDown(QEvent::KeyPress, Qt::Key_Control, Qt::ControlModifier);
       QApplication::sendEvent(window.centralWidget(), &ctrlDown);
@@ -71,7 +209,7 @@ private slots:
       QVERIFY(data); QVERIFY(network);
       QVERIFY(QMetaObject::invokeMethod(&window, "onSettingsLoginRequested",
                                        Qt::DirectConnection,
-                                       Q_ARG(QString, QStringLiteral("R1 - Hero"))));
+                                       Q_ARG(int, 1)));
       QTest::keyClick(window.centralWidget(), Qt::Key_T, Qt::ControlModifier);
       QKeyEvent ctrlDown(QEvent::KeyPress, Qt::Key_Control, Qt::ControlModifier);
       QApplication::sendEvent(window.centralWidget(), &ctrlDown);

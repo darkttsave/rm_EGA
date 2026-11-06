@@ -79,6 +79,8 @@ public:
    * @return bool 连接状态
    */
   bool isConnected() const;
+  bool isConnecting() const { return m_connecting; }
+  QString clientId() const { return m_clientId; }
 
   /**
    * @brief 订阅主题

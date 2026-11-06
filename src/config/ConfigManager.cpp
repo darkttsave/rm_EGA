@@ -6,19 +6,20 @@
  */
 
 #include "ConfigManager.h"
+#include "../core/RobotIdentity.h"
 #include <QCoreApplication>
 #include <QByteArray>
 #include <QFileInfo>
 #include <QFileSystemWatcher>
 #include <QJsonValue>
 #include <QTimer>
+#include <QSaveFile>
 
 QMutex ConfigManager::m_mutex;
 
 namespace {
 bool isValidClientRobotId(int robotId) {
-  return (robotId >= 1 && robotId <= 7) ||
-         (robotId >= 101 && robotId <= 107);
+  return RM::resolveRobotIdentity(robotId).rmulSelectable;
 }
 } // namespace
 
@@ -57,6 +58,7 @@ bool ConfigManager::loadConfig(const QString &configPath) {
   m_config = newConfig;
   qDebug() << "配置文件加载成功";
 
+  foundPath = QFileInfo(foundPath).absoluteFilePath();
   // 更新文件监控
   if (m_currentConfigPath != foundPath) {
     if (!m_currentConfigPath.isEmpty()) {
@@ -66,6 +68,9 @@ bool ConfigManager::loadConfig(const QString &configPath) {
     if (!m_currentConfigPath.isEmpty()) {
       m_watcher->addPath(m_currentConfigPath);
     }
+  } else if (!m_currentConfigPath.isEmpty() &&
+             !m_watcher->files().contains(m_currentConfigPath)) {
+    m_watcher->addPath(m_currentConfigPath);
   }
 
   emit configReloaded();
@@ -74,15 +79,19 @@ bool ConfigManager::loadConfig(const QString &configPath) {
 
 void ConfigManager::onFileChanged(const QString &path) {
   qDebug() << "配置文件发生变化:" << path;
+  if (QFileInfo(path).absoluteFilePath() != m_currentConfigPath) return;
   // 重新加载配置
   // 注意：某些编辑器可能会先删除再创建文件，导致 watcher 失效
   // 这里简单处理，如果文件存在则重新加载
   if (QFile::exists(path)) {
-    loadConfig(QFileInfo(path).fileName());
+    loadConfig(path);
   } else {
     // 如果文件被删除，可能需要重新添加监控（如果它再次出现）
     // 这里暂时不做复杂处理，只是尝试重新加载默认路径
-    QTimer::singleShot(100, this, [this]() { loadConfig(); });
+    QTimer::singleShot(100, this, [this, path]() {
+      if (QFileInfo(path).absoluteFilePath() == m_currentConfigPath)
+        loadConfig(path);
+    });
   }
 }
 
@@ -135,14 +144,14 @@ int ConfigManager::getClientRobotId() const {
               << "(from env RM_CLIENT_ROBOT_ID)";
       return parsed;
     }
-    qWarning() << "ConfigManager: 忽略无效的 RM_CLIENT_ROBOT_ID="
-               << envValue << "，有效范围为 1..7 或 101..107";
+    qWarning() << "ConfigManager: 无效的 RM_CLIENT_ROBOT_ID，请重新选择:" << envValue;
+    return 0;
   }
 
   const QJsonValue configValue =
       m_config["network"].toObject()["client_robot_id"];
   if (configValue.isDouble()) {
-    const int configured = configValue.toInt(1);
+    const int configured = configValue.toInt(0);
     if (isValidClientRobotId(configured)) {
       qInfo() << "ConfigManager: client_robot_id=" << configured
               << "(from config.json)";
@@ -150,14 +159,48 @@ int ConfigManager::getClientRobotId() const {
               << "(PowerShell: $env:RM_CLIENT_ROBOT_ID=<id>)";
       return configured;
     }
-    qWarning() << "ConfigManager: 忽略无效的 network.client_robot_id="
-               << configured << "，有效范围为 1..7 或 101..107";
+    qWarning() << "ConfigManager: 无效的 network.client_robot_id，请重新选择:" << configured;
   }
+  return 0;
+}
 
-  qInfo() << "ConfigManager: client_robot_id=1 (default)";
-  qInfo() << "ConfigManager: To override, set RM_CLIENT_ROBOT_ID=<id>"
-          << "(PowerShell: $env:RM_CLIENT_ROBOT_ID=<id>)";
-  return 1;
+bool ConfigManager::setClientRobotId(int robotId, QString *error) {
+  auto fail = [error](const QString &message) {
+    if (error) *error = message;
+    return false;
+  };
+  if (!isValidClientRobotId(robotId))
+    return fail(QStringLiteral("机器人身份无效，请重新选择"));
+  const QByteArray envValue = qgetenv("RM_CLIENT_ROBOT_ID").trimmed();
+  if (!envValue.isEmpty()) {
+    bool ok = false;
+    const int overrideId = QString::fromUtf8(envValue).toInt(&ok);
+    if (!ok || overrideId != robotId)
+      return fail(QStringLiteral("启动环境已锁定机器人身份，请移除 RM_CLIENT_ROBOT_ID 后重新启动"));
+  }
+  QMutexLocker locker(&m_mutex);
+  if (m_currentConfigPath.isEmpty())
+    return fail(QStringLiteral("未找到可写配置文件"));
+  QFile source(m_currentConfigPath);
+  if (!source.open(QIODevice::ReadOnly))
+    return fail(QStringLiteral("无法读取配置文件"));
+  QJsonParseError parseError;
+  const QByteArray original = source.readAll();
+  source.close();
+  const QJsonDocument document = QJsonDocument::fromJson(original, &parseError);
+  if (parseError.error != QJsonParseError::NoError || !document.isObject())
+    return fail(QStringLiteral("配置文件格式错误"));
+  QJsonObject updated = document.object();
+  QJsonObject network = updated.value("network").toObject();
+  network["client_robot_id"] = robotId;
+  updated["network"] = network;
+  QSaveFile destination(m_currentConfigPath);
+  const QByteArray serialized = QJsonDocument(updated).toJson();
+  if (!destination.open(QIODevice::WriteOnly) ||
+      destination.write(serialized) != serialized.size() || !destination.commit())
+    return fail(QStringLiteral("无法保存机器人身份"));
+  m_config = updated;
+  return true;
 }
 
 QString ConfigManager::getDefaultVideoPath() const {

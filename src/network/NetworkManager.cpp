@@ -13,6 +13,7 @@
 // --- 头文件包含 ---
 #include "NetworkManager.h"
 #include "../core/CustomDataTypes.h"  // 自定义数据结构定义
+#include "../core/RobotIdentity.h"
 #include "../core/LogFileNaming.h"
 #include "../config/ConfigManager.h" // 配置管理器，获取服务器 IP 和端口
 #include "MqttLogger.h"
@@ -35,6 +36,17 @@
 #include <algorithm>
 
 namespace RM {
+
+bool NetworkManager::canSendForCurrentIdentity() const {
+  if (!m_gameData || !resolveRobotIdentity(m_gameData->getCurrentRobotId()).rmulSelectable)
+    return false;
+#ifdef RM_HAS_MQTT
+  if (m_mqttManager && m_mqttManager->isConnected() &&
+      m_mqttManager->clientId() != QString::number(m_gameData->getCurrentRobotId()))
+    return false;
+#endif
+  return true;
+}
 
 #ifdef RM_HAS_MQTT
 namespace {
@@ -379,6 +391,11 @@ void NetworkManager::sendData(const QByteArray &data,
  */
 void NetworkManager::sendData(const robomaster::RoboMasterMessage &message,
                               const QHostAddress &address, quint16 port) {
+  if ((message.has_common_command() || message.has_map_click() || message.has_robot_cmd()) &&
+      !canSendForCurrentIdentity()) return;
+  if (message.has_common_command() &&
+      resolveRobotIdentity(m_gameData->getCurrentRobotId()).role == RobotType::HEAVY &&
+      (message.common_command().cmd_type() == 2 || message.common_command().cmd_type() == 5)) return;
 #ifdef RM_HAS_MQTT
   if (m_mqttManager && m_mqttManager->isConnected()) {
     const QString topic = mqttTopicForMessage(message);
@@ -443,6 +460,7 @@ void NetworkManager::sendData(const robomaster::RoboMasterMessage &message,
  * @param type 标记类型（攻击/防守/其他）
  */
 void NetworkManager::sendMapMarking(float x, float y, int type) {
+  if (!canSendForCurrentIdentity()) return;
 #ifdef RM_HAS_MQTT
   if (m_mqttManager) {
     qWarning() << "NetworkManager: MapMarking is a legacy UDP-only message and"
@@ -481,6 +499,7 @@ void NetworkManager::sendMapMarking(float x, float y, int type) {
  * @param targetId 目标机器人 ID
  */
 void NetworkManager::sendRobotCommand(int cmdType, int targetId) {
+  if (!canSendForCurrentIdentity()) return;
 #ifdef RM_HAS_MQTT
   if (m_mqttManager) {
     qWarning() << "NetworkManager: RobotCommand is a legacy UDP-only message and"
@@ -510,6 +529,10 @@ void NetworkManager::sendRobotCommand(int cmdType, int targetId) {
 }
 
 void NetworkManager::sendCommonCommand(int cmdType, int param) {
+  if (!canSendForCurrentIdentity()) return;
+  // 旧英雄 42mm 专属兑换尚未适配重装。
+  if ((cmdType == 2 || cmdType == 5) &&
+      resolveRobotIdentity(m_gameData->getCurrentRobotId()).role == RobotType::HEAVY) return;
 #ifdef RM_HAS_MQTT
   if (shouldThrottleCommand(m_lastCommonCommandSentMs, 100)) {
     qWarning() << "NetworkManager: CommonCommand throttled to <= 10Hz"
@@ -546,6 +569,7 @@ void NetworkManager::sendCommonCommand(int cmdType, int param) {
 }
 
 void NetworkManager::sendDartCommand(uint32_t targetId, bool open, bool launchConfirm) {
+  if (!canSendForCurrentIdentity()) return;
 #ifdef RM_HAS_MQTT
   robomaster::DartCommand cmd;
   cmd.set_target_id(targetId);
@@ -581,6 +605,7 @@ void NetworkManager::sendDartCommand(uint32_t targetId, bool open, bool launchCo
 bool NetworkManager::sendKeyboardMouseControl(
     int mouseX, int mouseY, int mouseZ, bool leftButtonDown,
     bool rightButtonDown, bool midButtonDown, quint32 keyboardValue) {
+  if (!canSendForCurrentIdentity()) return false;
 #ifdef RM_HAS_MQTT
   constexpr qint64 kKeyboardMouseMinIntervalMs = 13; // 最高约 75 Hz。
   const bool isNeutralFrame =
@@ -686,6 +711,7 @@ bool NetworkManager::sendKeyboardMouseControl(
 void NetworkManager::sendMapClickInfo(quint32 targetRobotId, float x, float y,
                                       int type, int ascii, int enemyId,
                                       bool sendAll) {
+  if (!canSendForCurrentIdentity()) return;
 #ifdef RM_HAS_MQTT
   if (shouldThrottleCommand(m_lastMapClickInfoSentMs, 500)) {
     qWarning() << "NetworkManager: MapClickInfoNotify throttled to <= 2Hz"
@@ -736,6 +762,10 @@ void NetworkManager::sendMapClickInfo(quint32 targetRobotId, float x, float y,
 }
 
 void NetworkManager::sendAssemblyCommand(int operation, int difficulty) {
+  Q_UNUSED(operation)
+  Q_UNUSED(difficulty)
+  qWarning() << "NetworkManager: 旧工程装配入口已冻结";
+  return;
 #ifdef RM_HAS_MQTT
   const QString topic = QStringLiteral("AssemblyCommand");
   const QString operationName = assemblyOperationName(operation);
@@ -787,6 +817,7 @@ void NetworkManager::sendAssemblyCommand(int operation, int difficulty) {
 }
 
 bool NetworkManager::sendAirSupportCommand(int commandId) {
+  if (!canSendForCurrentIdentity()) return false;
 #ifdef RM_HAS_MQTT
   if (shouldThrottleCommand(m_lastAirSupportCommandSentMs, 1000)) {
     qWarning() << "NetworkManager: AirSupportCommand throttled to <= 1Hz"
@@ -839,6 +870,8 @@ bool NetworkManager::sendAirSupportCommand(int commandId) {
 }
 
 void NetworkManager::sendRobotPerformanceSelection(uint32_t shooter, uint32_t chassis, uint32_t sentryControl) {
+  if (!canSendForCurrentIdentity() || shooter > 2 || chassis > 2) return;
+  if (resolveRobotIdentity(m_gameData->getCurrentRobotId()).role == RobotType::HEAVY) return;
 #ifdef RM_HAS_MQTT
   robomaster::RobotPerformanceSelectionCommand cmd;
   cmd.set_shooter(shooter);
@@ -868,6 +901,9 @@ void NetworkManager::sendRobotPerformanceSelection(uint32_t shooter, uint32_t ch
 }
 
 void NetworkManager::sendHeroDeployMode(uint32_t mode) {
+  Q_UNUSED(mode)
+  qWarning() << "NetworkManager: 旧英雄部署入口已冻结";
+  return;
 #ifdef RM_HAS_MQTT
   robomaster::HeroDeployModeEventCommand cmd;
   cmd.set_mode(mode);
@@ -902,6 +938,7 @@ void NetworkManager::sendHeroDeployMode(uint32_t mode) {
 }
 
 void NetworkManager::sendRuneActivate(uint32_t activate) {
+  if (!canSendForCurrentIdentity()) return;
 #ifdef RM_HAS_MQTT
   robomaster::RuneActivateCommand cmd;
   cmd.set_activate(activate);
@@ -1093,6 +1130,7 @@ void NetworkManager::startMqtt(const QString &brokerUri,
     connect(
         m_mqttManager, &MqttManager::connectionStateChanged, this,
         [this](bool connected) {
+          emit mqttConnectionStateChanged(connected);
           if (connected) {
             qDebug()
                 << "NetworkManager: MQTT connected, subscribing to topics...";
@@ -1124,6 +1162,10 @@ void NetworkManager::stopMqtt() {
 
 bool NetworkManager::isMqttConnected() const {
   return m_mqttManager && m_mqttManager->isConnected();
+}
+
+bool NetworkManager::isMqttConnecting() const {
+  return m_mqttManager && m_mqttManager->isConnecting();
 }
 
 void NetworkManager::subscribeToTopics() {

@@ -170,6 +170,7 @@ public:
    * @brief 检查 MQTT 是否已连接
    */
   bool isMqttConnected() const;
+  bool isMqttConnecting() const;
 #endif
 
   // --- 数据发送 ---
@@ -367,6 +368,7 @@ signals:
    * @param error 失败时的错误描述
    */
   void mqttConnectCompleted(bool success, const QString &error);
+  void mqttConnectionStateChanged(bool connected);
 #endif
 
 private slots:
@@ -380,6 +382,7 @@ private slots:
   void onReadyRead();
 
 private:
+  bool canSendForCurrentIdentity() const;
   friend class ::TestOfficialMessageHandler;
   // --- 私有成员 ---
 

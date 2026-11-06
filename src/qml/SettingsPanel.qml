@@ -39,17 +39,16 @@ Rectangle {
     property bool isVideoConnected: false // 图传连接状态
     property int comboBoxHeight: root.height*0.07 // 统一下拉框高度，避免破坏现有布局结构
     property string selectedRobotType: ""
+    property int selectedRobotId: 0
     property string activeRobotLabel: ""
     property string chassisSelectionText: "初始设置"    //底盘类型文本
     property string shooterSelectionText: "初始设置"    //发射机构类型文本
     readonly property bool hasActiveRobot: activeRobotLabel !== ""
-    readonly property bool currentSelectionActive: selectedRobotType !== "" && selectedRobotType === robotSelector.currentText
+    readonly property bool currentSelectionActive: selectedRobotId > 0 && selectedRobotId === robotSelector.currentValue
     readonly property string currentRobotSelection: robotSelector.currentText
-    readonly property var shortcutRobotTypes: [
-        "R1 - Hero", "R2 - Engineer", "R3 - Standard", "R4 - Standard",
-        "R6 - Aerial", "B1 - Hero", "B2 - Engineer", "B3 - Standard",
-        "B4 - Standard", "B6 - Aerial"
-    ]
+    readonly property var shortcutRobotIds: [1, 3, 7, 101, 103, 107]
+    property string identityError: ""
+    property string mqttIdentity: "未连接"
     property bool performanceControlsReady: false
     property bool robotShortcutPending: false
 
@@ -59,6 +58,7 @@ Rectangle {
             robotSelector.syncFromSelectedRobot()
         }
     }
+    onSelectedRobotIdChanged: robotSelector.syncFromSelectedRobot()
 
     onVisibleChanged: {
         if (!visible)
@@ -140,7 +140,7 @@ Rectangle {
     }
 
     function emitPerformanceSelectionIfReady() {
-        if (!performanceControlsReady)
+        if (!performanceControlsReady || selectedRobotId === 0 || selectedRobotId === 1 || selectedRobotId === 101)
             return
 
         var shooter = shooterSelectionValue(launchTypeCombo.currentText)
@@ -153,13 +153,13 @@ Rectangle {
     }
 
     // 数字快捷键只改变下拉框的待确认选择；真正登录仍复用现有 loginRequested 链路。
-    function selectRobotByShortcut(robotType) {
+    function selectRobotByShortcut(robotId) {
         robotShortcutPending = false
-        if (!robotType || shortcutRobotTypes.indexOf(robotType) < 0)
+        if (shortcutRobotIds.indexOf(robotId) < 0)
             return false
 
         for (var i = 0; i < robotSelector.count; ++i) {
-            if (robotSelector.textAt(i) === robotType) {
+            if (robotSelector.valueAt(i) === robotId) {
                 robotSelector.currentIndex = i
                 robotShortcutPending = true
                 return true
@@ -173,7 +173,7 @@ Rectangle {
             return false
 
         robotShortcutPending = false
-        root.loginRequested(robotSelector.currentText)
+        root.loginRequested(robotSelector.currentValue)
         return true
     }
 
@@ -182,7 +182,7 @@ Rectangle {
     }
 
     //登录机器人设置
-    signal loginRequested(string robotType)
+    signal loginRequested(int robotId)
     signal logoutRequested()
     //图传设置
     signal vtChanged(string vtType)
@@ -278,16 +278,26 @@ Rectangle {
                         id: robotSelector
                         Layout.fillWidth: true
                         Layout.preferredHeight: root.comboBoxHeight
-                        model: ["R1 - Hero", "R2 - Engineer", "R3 - Standard",
-                                "R4 - Standard", "R6 - Aerial", "R7 - Sentry",
-                                "B1 - Hero", "B2 - Engineer", "B3 - Standard",
-                                "B4 - Standard", "B6 - Aerial", "B7 - Sentry"]
+                        model: [
+                            { text: "R1 - 重装", robotId: 1 },
+                            { text: "R3 - 步兵", robotId: 3 },
+                            { text: "R7 - 哨兵", robotId: 7 },
+                            { text: "B1 - 重装", robotId: 101 },
+                            { text: "B3 - 步兵", robotId: 103 },
+                            { text: "B7 - 哨兵", robotId: 107 }
+                        ]
+                        textRole: "text"
+                        valueRole: "robotId"
+                        currentIndex: -1
+                        displayText: currentIndex < 0 ? "请选择机器人" : currentText
 
                         function syncFromSelectedRobot() {
-                            if (!root.selectedRobotType)
+                            if (!root.selectedRobotId) {
+                                robotSelector.currentIndex = -1
                                 return
+                            }
                             for (var i = 0; i < robotSelector.count; ++i) {
-                                if (robotSelector.textAt(i) === root.selectedRobotType) {
+                                if (robotSelector.valueAt(i) === root.selectedRobotId) {
                                     robotSelector.currentIndex = i
                                     return
                                 }
@@ -351,17 +361,17 @@ Rectangle {
                             anchors.fill: parent
                             cursorShape: Qt.PointingHandCursor
                             onClicked: {
-                                if (root.hasActiveRobot) {
+                                if (root.hasActiveRobot && root.currentSelectionActive) {
                                     root.logoutRequested()
                                 } else {
-                                    root.loginRequested(robotSelector.currentText)
+                                    root.loginRequested(robotSelector.currentValue)
                                 }
                             }
                         }
 
                         // 5. 文字
                         Text {
-                            text: root.hasActiveRobot ? "退 出" : "登 录"
+                            text: root.hasActiveRobot && root.currentSelectionActive ? "退 出" : "选择并登录"
                             color: "white"
                             font.bold: true
                             font.pixelSize: root.height * 0.03
@@ -374,9 +384,14 @@ Rectangle {
                     // 登录状态指示
                     Text {
                         Layout.alignment: Qt.AlignHCenter
-                        text: root.activeRobotLabel !== "" ? "✅ 当前机器人: " + root.activeRobotLabel : "🔴 未选择机器人"
+                        text: root.identityError !== "" ? root.identityError : root.activeRobotLabel !== "" ? "✅ 当前机器人: " + root.activeRobotLabel : "🔴 未选择机器人，请选择并登录"
                         color: root.activeRobotLabel !== "" ? "#00FF00" : "red"
                         font.bold: true
+                    }
+                    Text {
+                        Layout.alignment: Qt.AlignHCenter
+                        text: "MQTT 身份: " + root.mqttIdentity
+                        color: "white"
                     }
 
                     // 分隔线
@@ -472,9 +487,10 @@ Rectangle {
                         }
                         ComboBox {
                             id: chassisTypeCombo
+                            enabled: root.selectedRobotId !== 0 && root.selectedRobotId !== 1 && root.selectedRobotId !== 101
                             Layout.fillWidth: true
                             Layout.preferredHeight: root.comboBoxHeight
-                            model: ["初始设置", "血量优先", "功率优先","英雄近战优先","英雄远程优先"]
+                            model: ["初始设置", "血量优先", "功率优先"]
                             onCurrentTextChanged: {
                                 if (root.chassisSelectionText !== chassisTypeCombo.currentText)
                                     root.chassisSelectionText = chassisTypeCombo.currentText    //保持底盘类型文本与选择框内一致
@@ -509,9 +525,10 @@ Rectangle {
                         }
                         ComboBox {
                             id: launchTypeCombo
+                            enabled: root.selectedRobotId !== 0 && root.selectedRobotId !== 1 && root.selectedRobotId !== 101
                             Layout.fillWidth: true
                             Layout.preferredHeight: root.comboBoxHeight
-                            model: ["初始设置", "冷却优先", "爆发优先","英雄近战优先","英雄远程优先"]
+                            model: ["初始设置", "冷却优先", "爆发优先"]
                             onCurrentTextChanged: {
                                 if (root.shooterSelectionText !== launchTypeCombo.currentText)
                                     root.shooterSelectionText = launchTypeCombo.currentText

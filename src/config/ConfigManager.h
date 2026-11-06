@@ -50,6 +50,7 @@ public:
   QString getMqttBroker() const;
   quint16 getMqttPort() const;
   int getClientRobotId() const;
+  bool setClientRobotId(int robotId, QString *error = nullptr);
 
   // 窗口配置访问器
   int getWindowMinWidth() const;      // 窗口最小宽度 (默认1280)

@@ -87,16 +87,13 @@ private slots:
     QTest::addColumn<int>("key");
     QTest::addColumn<int>("robotId");
 
-    QTest::newRow("1-red-hero") << static_cast<int>(Qt::Key_1) << 1;
-    QTest::newRow("2-red-engineer") << static_cast<int>(Qt::Key_2) << 2;
-    QTest::newRow("3-red-standard") << static_cast<int>(Qt::Key_3) << 3;
-    QTest::newRow("4-red-standard") << static_cast<int>(Qt::Key_4) << 4;
-    QTest::newRow("5-red-aerial") << static_cast<int>(Qt::Key_5) << 6;
-    QTest::newRow("6-blue-hero") << static_cast<int>(Qt::Key_6) << 101;
-    QTest::newRow("7-blue-engineer") << static_cast<int>(Qt::Key_7) << 102;
-    QTest::newRow("8-blue-standard") << static_cast<int>(Qt::Key_8) << 103;
-    QTest::newRow("9-blue-standard") << static_cast<int>(Qt::Key_9) << 104;
-    QTest::newRow("0-blue-aerial") << static_cast<int>(Qt::Key_0) << 106;
+    QTest::newRow("red-heavy") << static_cast<int>(Qt::Key_1) << 1;
+    QTest::newRow("red-infantry") << static_cast<int>(Qt::Key_2) << 3;
+    QTest::newRow("red-sentry") << static_cast<int>(Qt::Key_3) << 7;
+    QTest::newRow("blue-heavy") << static_cast<int>(Qt::Key_4) << 101;
+    QTest::newRow("blue-infantry") << static_cast<int>(Qt::Key_5) << 103;
+    QTest::newRow("blue-sentry") << static_cast<int>(Qt::Key_6) << 107;
+    QTest::newRow("unused") << static_cast<int>(Qt::Key_7) << 0;
   }
 
   void testSettingsRobotShortcutMapping() {

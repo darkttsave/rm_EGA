@@ -46,6 +46,7 @@
 // --- 项目头文件 ---
 #include "../config/ConfigManager.h"
 #include "../core/GameData.h"
+#include "../core/RobotIdentity.h"
 #include "../core/GameConstants.h"
 #include "../core/TimedEventRules.h"
 #include "../core/TacticalAnalyzer.h"
@@ -123,42 +124,6 @@ void setVisibleIfNeeded(WidgetT *widget, bool visible) {
     return;
   }
   visible ? widget->show() : widget->hide();
-}
-
-int normalizedRobotIdFromSelection(const QString &robotType) {
-  static const QRegularExpression kRobotPattern(QStringLiteral("[RB](\\d+)"),
-                                                QRegularExpression::CaseInsensitiveOption);
-  const QRegularExpressionMatch match = kRobotPattern.match(robotType);
-  if (!match.hasMatch()) {
-    return 0;
-  }
-  bool ok = false;
-  const int robotId = match.captured(1).toInt(&ok);
-  if (!ok || robotId <= 0) {
-    return 0;
-  }
-  return robotId;
-}
-
-QString settingsRobotTypeLabelForNormalizedId(int robotId) {
-  switch (robotId) {
-  case 1:
-    return QStringLiteral("R1 - Hero");
-  case 2:
-    return QStringLiteral("R2 - Engineer");
-  case 3:
-    return QStringLiteral("R3 - Standard");
-  case 4:
-    return QStringLiteral("R4 - Standard");
-  case 5:
-    return QStringLiteral("R5 - Standard");
-  case 6:
-    return QStringLiteral("R6 - Aerial");
-  case 7:
-    return QStringLiteral("R7 - Sentry");
-  default:
-    return QStringLiteral("R1 - Hero");
-  }
 }
 
 bool isInfantryRobotId(int robotId) {
@@ -682,8 +647,10 @@ void MainWindow::initializeCore() {
 #endif
 
   // 启动默认机器人身份以配置/环境变量为准，避免硬编码回落到 R3。
-  m_selectedRobotTypeFromSettings = settingsRobotTypeLabel(
-      static_cast<quint8>(ConfigManager::instance().getClientRobotId()));
+  const int configuredRobotId = ConfigManager::instance().getClientRobotId();
+  m_gameData->setCurrentRobotId(configuredRobotId);
+  m_selectedRobotTypeFromSettings = settingsRobotTypeLabel(configuredRobotId);
+  m_exchangeHintLoginActive = RM::resolveRobotIdentity(configuredRobotId).rmulSelectable;
 
   // 初始化调试日志窗口
   m_debugLogWidget = new DebugLogWidget(); // 独立窗口
@@ -815,22 +782,23 @@ void MainWindow::setupDevHooks() {
   }
 #endif  // RM26_ENABLE_DEVTOOLS
 
-  // MQTT 连接完成信号必须在 DEVTOOLS 外面，否则非dev构建下收不到回调
-#ifdef RM_HAS_MQTT
-  connect(m_networkManager, &NetworkManager::mqttConnectCompleted, this,
-          [this](bool success, const QString &error) {
-            if (m_mqttIsBootstrapMode) {
-              onMqttBootstrapCompleted(success, error);
-            } else {
-              onMqttSwitchCompleted(success, error);
-            }
-          });
-#endif  // RM_HAS_MQTT
 }
 
 // --- 信号-槽集中绑定 ---
 void MainWindow::setupConnections() {
   // QML 上下文属性改在 initializeLayout 中绑定，确保初始化顺序正确。
+
+#ifdef RM_HAS_MQTT
+  connect(m_networkManager, &NetworkManager::mqttConnectionStateChanged, this,
+          [this](bool) { syncSettingsPanelState(); });
+  connect(m_networkManager, &NetworkManager::mqttConnectCompleted, this,
+          [this](bool success, const QString &error) {
+            if (m_mqttIsBootstrapMode)
+              onMqttBootstrapCompleted(success, error);
+            else
+              onMqttSwitchCompleted(success, error);
+          });
+#endif
 
   // --- GameData 信号 ---
   connect(m_gameData, &GameData::outpostDestroyed, this,
@@ -1326,17 +1294,23 @@ void MainWindow::setupConnections() {
 // --- 启动服务 ---
 void MainWindow::startServices() {
   const quint8 selectedRobotId =
-      robotIdFromSettingsType(m_selectedRobotTypeFromSettings);
+      (m_gameData ? m_gameData->getCurrentRobotId() : 0);
   const QStringList clientIdCandidates =
-      mqttClientIdCandidatesForRobotType(m_selectedRobotTypeFromSettings);
+      mqttClientIdCandidatesForRobotId(selectedRobotId);
 
   if (m_gameData) {
     m_gameData->setCurrentRobotId(selectedRobotId);
+  }
+  if (clientIdCandidates.isEmpty()) {
+    qWarning() << "MainWindow: 未选择有效机器人，MQTT 不启动";
+    finishServicesStartup(false);
+    return;
   }
 
 #ifdef RM_HAS_MQTT
   // 如果使用 Paho MQTT（RM_HAS_MQTT），通过 NetworkManager 异步启动 MQTT 连接
   {
+    if (m_networkManager && m_networkManager->isMqttConnecting()) return;
     const QString broker = ConfigManager::instance().getMqttBroker();
     const quint16 port = ConfigManager::instance().getMqttPort();
     const QString uri = QStringLiteral("tcp://%1:%2").arg(broker).arg(port);
@@ -1462,7 +1436,7 @@ void MainWindow::triggerScheduledMqttReconnect() {
   qInfo() << "MainWindow: triggering scheduled MQTT reconnect"
           << "robotType=" << m_selectedRobotTypeFromSettings
           << "broker=" << m_mqttUri;
-  restartMqttForRobotType(m_selectedRobotTypeFromSettings);
+  restartMqttForRobotId(m_gameData ? m_gameData->getCurrentRobotId() : 0);
 #endif
 }
 
@@ -1490,6 +1464,7 @@ void MainWindow::onMqttBootstrapCompleted(bool success, const QString &error) {
     m_lastMqttConnectError.clear();
     qInfo() << "MainWindow: MQTT bootstrap success, clientId=" << m_activeMqttClientId;
     finishServicesStartup(true);
+    syncSettingsPanelState();
   } else {
     m_lastMqttConnectError = error;
     qWarning() << "MainWindow: MQTT bootstrap failed for clientId"
@@ -1521,6 +1496,7 @@ void MainWindow::onMqttSwitchCompleted(bool success, const QString &error) {
         m_activeMqttClientId, m_tryingMqttClientId);
     m_lastMqttConnectError.clear();
     qDebug() << "MainWindow: MQTT switch success, clientId=" << m_activeMqttClientId;
+    syncSettingsPanelState();
   } else {
     m_lastMqttConnectError = error;
     qWarning() << "MainWindow: MQTT switch failed for clientId"
@@ -1544,74 +1520,27 @@ void MainWindow::onMqttSwitchCompleted(bool success, const QString &error) {
   }
 }
 
-// 将 SettingsPanel 的机器人类型转换为基础 ID
-int MainWindow::baseRobotIdFromSettingsType(const QString &robotType) const {
-  // 读取 SettingsPanel 当前选择的机器人类型
-  static const QRegularExpression re(QStringLiteral("[RB](\\d+)"),
-                                     QRegularExpression::CaseInsensitiveOption);
-  const QRegularExpressionMatch match = re.match(robotType);
-  //转化为数字
-  if (match.hasMatch()) {
-    bool ok = false;
-    const int id = match.captured(1).toInt(&ok);
-    if (ok) {
-      return id;
-    }
-  }
-  return 3;
-}
-
-// 将 SettingsPanel 的机器人类型转换为带阵营的机器人 ID
-quint8 MainWindow::robotIdFromSettingsType(const QString &robotType) const {
-  int baseId = baseRobotIdFromSettingsType(robotType);
-  if (baseId < 1 || baseId > 9) {
-    baseId = 3;
-  }
-
-  const bool isBlue = robotType.startsWith("B", Qt::CaseInsensitive);
-  return static_cast<quint8>(isBlue ? (100 + baseId) : baseId);
-}
-
-// 根据 SettingsPanel 选择的 robotType 生成协议定义的 MQTT clientId。
-// V1.3 文档定义：红方 1~7，蓝方 101~107。
-QString MainWindow::mqttClientIdForRobotType(const QString &robotType) const {
-  return QString::number(robotIdFromSettingsType(robotType));
-}
-
-// 返回可尝试的 clientId 列表。
-// Settings 登录/切换时必须让选中的机器人身份成为唯一 MQTT 身份；
-// 否则 broker 拒绝 R4/R5 后回退到 config 里的 R3，会导致服务器仍显示 3 在线。
-QStringList MainWindow::mqttClientIdCandidatesForRobotType(
-    const QString &robotType) const {
-  QStringList candidates;
-
-  const QString protocolId = mqttClientIdForRobotType(robotType).trimmed();
-  if (!protocolId.isEmpty()) {
-    candidates << protocolId;
-    return candidates;
-  }
-
-  const int configuredId = ConfigManager::instance().getClientRobotId();
-  if (configuredId > 0) {
-    candidates << QString::number(configuredId);
-  }
-
-  return candidates;
+QStringList MainWindow::mqttClientIdCandidatesForRobotId(int robotId) const {
+  return RM::resolveRobotIdentity(robotId).rmulSelectable
+             ? QStringList{QString::number(robotId)} : QStringList{};
 }
 
 // 根据当前 SettingsPanel 选择的机器人，重启 MQTT 连接并切换 clientId
-void MainWindow::restartMqttForRobotType(const QString &robotType) {
-  const QStringList candidates = mqttClientIdCandidatesForRobotType(robotType);
+void MainWindow::restartMqttForRobotId(int robotId) {
+  const QStringList candidates = mqttClientIdCandidatesForRobotId(robotId);
   if (candidates.isEmpty()) {
     return;
   }
+#ifdef RM_HAS_MQTT
+  if (m_networkManager && m_networkManager->isMqttConnecting()) return;
+#endif
   cancelScheduledMqttReconnect();
   if (candidates.first() == m_activeMqttClientId && m_networkManager &&
       m_networkManager->isMqttConnected()) {
     qDebug() << "MainWindow: MQTT clientId unchanged:" << m_activeMqttClientId;
     return;
   }
-  qInfo() << "MainWindow: switching MQTT identity, robotType=" << robotType
+  qInfo() << "MainWindow: switching MQTT identity, robotId=" << robotId
           << "candidates=" << candidates;
 
 #ifdef RM_HAS_MQTT
@@ -1622,13 +1551,15 @@ void MainWindow::restartMqttForRobotType(const QString &robotType) {
 
     // 断开当前 MQTT 连接
     m_networkManager->stopMqtt();
+    m_activeMqttClientId.clear();
+    syncSettingsPanelState();
 
     // 异步切换：逐个尝试候选 clientId，主线程不阻塞
     m_mqttCandidates = candidates;
     m_mqttCandidateIndex = 0;
     m_mqttUri = uri;
     m_lastMqttConnectError.clear();
-    m_mqttIsBootstrapMode = false;
+    m_mqttIsBootstrapMode = !m_servicesStarted;
     // 保存正在尝试连接的 clientId，以便回调时直接使用
     m_tryingMqttClientId = candidates.first();
     if (!m_mqttCandidates.isEmpty()) {
@@ -1649,7 +1580,7 @@ void MainWindow::restartMqttForRobotType(const QString &robotType) {
   m_mqttClient->start();
   m_activeMqttClientId = candidates.first();
 #else
-  Q_UNUSED(robotType);
+  Q_UNUSED(robotId);
 #endif
 }
 
@@ -2757,7 +2688,7 @@ void MainWindow::createCenterArea() {
 
   // 启动时按 SettingsPanel 当前选择同步视角机器人，避免固定写死红方 1 号。
   m_gameData->setCurrentRobotId(
-      robotIdFromSettingsType(m_selectedRobotTypeFromSettings));
+      (m_gameData ? m_gameData->getCurrentRobotId() : 0));
   // 触发面板与小地图的刷新，读取 GameData 并同步高亮
   updateCurrentRobotPanel();
 
@@ -3902,13 +3833,9 @@ void MainWindow::updateExchangeHintText(const QString &robotType) {
   QString actionText = isPanelOpen ? "关闭" : "打开";
 
   // 判断机器人类型
-  const QString effectiveRobotType =
-      robotType.isEmpty() ? m_selectedRobotTypeFromSettings : robotType;
-  const int baseRobotId = baseRobotIdFromSettingsType(effectiveRobotType);
-  bool isEngineer = baseRobotId == 2 ||
-                    m_exchangeQmlSource.contains("ExchangePanelEngineer.qml");
-  bool isAerial = baseRobotId == 6 ||
-                  m_exchangeQmlSource.contains("ExchangePanelAerial.qml");
+  Q_UNUSED(robotType)
+  const bool isEngineer = false;
+  const bool isAerial = false;
 
   bool isSpecialRobot = isEngineer || isAerial;
   const bool canOpenRemoteExchange = canOpenRemoteExchangePanel();
@@ -4695,10 +4622,7 @@ bool MainWindow::shouldShowDeployModePanel() const {
     return false;
   }
 
-  const bool isHeroSelected =
-      baseRobotIdFromSettingsType(m_selectedRobotTypeFromSettings) == 1 ||
-      m_selectedRobotTypeFromSettings.contains("Hero", Qt::CaseInsensitive);
-  return isHeroSelected;
+  return false; // 旧英雄部署入口冻结，重装不继承英雄业务。
 }
 
 void MainWindow::updateDeployModePanelGeometry() {
@@ -4808,7 +4732,15 @@ void MainWindow::syncSettingsPanelState() {
       m_gameData ? m_gameData->getCurrentRobotId()
                  : static_cast<quint8>(ConfigManager::instance().getClientRobotId());
   QObject *root = m_qmlSettingsPanel->rootObject();
+  root->setProperty("selectedRobotId", currentRobotId);
+  QString mqttIdentity = QStringLiteral("未连接");
+#ifdef RM_HAS_MQTT
+  if (m_networkManager && m_networkManager->isMqttConnected() && !m_activeMqttClientId.isEmpty())
+    mqttIdentity = m_activeMqttClientId;
+#endif
+  root->setProperty("mqttIdentity", mqttIdentity);
   root->setProperty("selectedRobotType", settingsRobotTypeLabel(currentRobotId));
+  root->setProperty("identityError", currentRobotId == 0 ? QStringLiteral("机器人身份无效，请重新选择") : QString());
   root->setProperty("activeRobotLabel",
                     m_exchangeHintLoginActive
                         ? settingsRobotTypeLabel(currentRobotId)
@@ -4883,36 +4815,12 @@ void MainWindow::syncSettingsPanelState() {
       nextShooterText);
 }
 
-quint8 MainWindow::resolveRobotIdFromSettingsSelection(
-    const QString &robotType) const {
-  const int normalizedRobotId = normalizedRobotIdFromSelection(robotType);
-  if (normalizedRobotId <= 0) {
-    return static_cast<quint8>(ConfigManager::instance().getClientRobotId());
-  }
-
-  if (robotType.startsWith("R", Qt::CaseInsensitive) ||
-      robotType.startsWith("B", Qt::CaseInsensitive)) {
-    return static_cast<quint8>(robotType.startsWith("B", Qt::CaseInsensitive)
-                                   ? normalizedRobotId + 100
-                                   : normalizedRobotId);
-  }
-
-  const quint8 referenceRobotId =
-      m_gameData ? m_gameData->getCurrentRobotId()
-                 : static_cast<quint8>(ConfigManager::instance().getClientRobotId());
-  const bool isBluePerspective = referenceRobotId >= 100;
-  return static_cast<quint8>(isBluePerspective ? normalizedRobotId + 100
-                                               : normalizedRobotId);
-}
-
 QString MainWindow::settingsRobotTypeLabel(quint8 robotId) const {
-  const bool isBlue = robotId >= 100;
-  const int normalizedRobotId = isBlue ? (robotId - 100) : robotId;
-  QString label = settingsRobotTypeLabelForNormalizedId(normalizedRobotId);
-  if (isBlue && label.startsWith("R")) {
-    label[0] = QLatin1Char('B');
-  }
-  return label;
+  const auto identity = RM::resolveRobotIdentity(robotId);
+  if (!identity.rmulSelectable || !identity.team || !identity.normalizedId) return {};
+  return QStringLiteral("%1%2 - %3")
+      .arg(*identity.team == TeamColor::RED ? QStringLiteral("R") : QStringLiteral("B"))
+      .arg(*identity.normalizedId).arg(identity.displayName);
 }
 
 void MainWindow::applySettingsRobotSelection(const QString &robotType,
@@ -4922,15 +4830,10 @@ void MainWindow::applySettingsRobotSelection(const QString &robotType,
   }
 
   m_selectedRobotTypeFromSettings = robotType;
-  const int baseRobotId = baseRobotIdFromSettingsType(robotType);
-  QString nextExchangeQmlSource;
-  if (baseRobotId == 2) {
-    nextExchangeQmlSource = "qrc:/qml/ExchangePanelEngineer.qml";
-  } else if (baseRobotId == 6) {
-    nextExchangeQmlSource = "qrc:/qml/ExchangePanelAerial.qml";
-  } else {
-    nextExchangeQmlSource = "qrc:/qml/ExchangePanel.qml";
-  }
+  // 清理旧角色面板和输入状态，统一回到通用界面。
+  if (m_qmlExchangePanel) m_qmlExchangePanel->hide();
+  if (m_qmlDeployModePanel) m_qmlDeployModePanel->hide();
+  const QString nextExchangeQmlSource = QStringLiteral("qrc:/qml/ExchangePanel.qml");
 
   const bool exchangePanelSourceChanged = (m_exchangeQmlSource != nextExchangeQmlSource);
   m_exchangeQmlSource = nextExchangeQmlSource;
@@ -5164,7 +5067,8 @@ bool MainWindow::canUseKeyboardMouseControl() const {
   // Developer mode reserves Ctrl+Shift+F10; its modifiers are robot keys.
   // Disable remote keyboard/mouse control for the entire developer session.
   if (qgetenv("RM_DEVTOOLS") == "1") return false;
-  return m_networkManager && RM::InputHotkeyPolicy::canUseKeyboardMouseControl(
+  return m_gameData && RM::resolveRobotIdentity(m_gameData->getCurrentRobotId()).rmulSelectable &&
+         m_networkManager && RM::InputHotkeyPolicy::canUseKeyboardMouseControl(
                                  m_exchangeHintLoginActive, m_tacticalMode);
 }
 
@@ -5904,6 +5808,7 @@ void MainWindow::setupKeyPanels() {
   // 初始化设置面板
   // ----------------P键-----------------------
   m_qmlSettingsPanel = new QQuickWidget(this);
+  m_qmlSettingsPanel->setObjectName(QStringLiteral("settingsPanel"));
   m_qmlSettingsPanel->setResizeMode(QQuickWidget::SizeViewToRootObject);
   m_qmlSettingsPanel->setFocusPolicy(Qt::StrongFocus);
   makeQQuickWidgetOpaque(m_qmlSettingsPanel, QColor(20, 20, 30));
@@ -5935,8 +5840,8 @@ void MainWindow::setupKeyPanels() {
     // 连接登录请求信号
     QObject *root = m_qmlSettingsPanel->rootObject();
     if (root) {
-      connect(root, SIGNAL(loginRequested(QString)), this,
-              SLOT(onSettingsLoginRequested(QString)));
+      connect(root, SIGNAL(loginRequested(int)), this,
+              SLOT(onSettingsLoginRequested(int)));
       connect(root, SIGNAL(logoutRequested()), this,
               SLOT(onSettingsLogoutRequested()));
       syncSettingsPanelState();
@@ -6265,7 +6170,7 @@ void MainWindow::updateDartCanOpenSoundOnOutpostHealthChange(TeamColor team) {
   }
 
   const int operatorRobotId =
-      robotIdFromSettingsType(m_selectedRobotTypeFromSettings);
+      (m_gameData ? m_gameData->getCurrentRobotId() : 0);
   if (!RM::isDartGateVoiceOperator(operatorRobotId)) {
     return;
   }
@@ -6419,7 +6324,7 @@ void MainWindow::onFpsChanged(const QString &fpsText) {
 void MainWindow::onPerformanceSelectionChanged(int shooter, int chassis,
                                                int sentryControl) {
   // 安全保护：0 表示“初始设置/未选择”，允许与另一项已选值一起发送。
-  if (shooter < 0 || shooter > 4 || chassis < 0 || chassis > 4 ||
+  if (shooter < 0 || shooter > 2 || chassis < 0 || chassis > 2 ||
       sentryControl < 0 || sentryControl > 1) {
     qWarning() << "MainWindow: invalid RobotPerformanceSelectionCommand values"
                << "shooter=" << shooter << "chassis=" << chassis
@@ -6526,7 +6431,7 @@ bool MainWindow::tryHandleSettingsPanelShortcut(QKeyEvent *event) {
     QVariant handled;
     const bool invoked = QMetaObject::invokeMethod(
         rootObj, "selectRobotByShortcut", Q_RETURN_ARG(QVariant, handled),
-        Q_ARG(QVariant, QVariant(robotType)));
+        Q_ARG(QVariant, QVariant(robotId)));
     if (!invoked || !handled.toBool()) {
       qWarning() << "MainWindow: settings robot shortcut selection failed"
                  << "key=" << event->key() << "robotType=" << robotType
@@ -8151,16 +8056,29 @@ void MainWindow::onARSettingsChanged() {
  * @param type 数据包类型
  * @param data 原始数据
  */
-void MainWindow::onSettingsLoginRequested(const QString &robotType) {
-  qDebug() << "Login requested for:" << robotType;
-  resetKeyboardMouseControlState(false);
-  m_exchangeHintLoginActive = true;
-  applySettingsRobotSelection(robotType,
-                              resolveRobotIdFromSettingsSelection(robotType));
+void MainWindow::onSettingsLoginRequested(int robotId) {
 #ifdef RM_HAS_MQTT
-  restartMqttForRobotType(robotType);
+  if (m_networkManager && m_networkManager->isMqttConnecting()) {
+    if (m_qmlSettingsPanel && m_qmlSettingsPanel->rootObject())
+      m_qmlSettingsPanel->rootObject()->setProperty("identityError", QStringLiteral("正在连接，请稍候再切换身份"));
+    return;
+  }
 #endif
-  updateExchangeHintText(robotType);
+  const auto identity = RM::resolveRobotIdentity(robotId);
+  QString error;
+  if (!identity.rmulSelectable || !ConfigManager::instance().setClientRobotId(robotId, &error)) {
+    if (error.isEmpty()) error = QStringLiteral("机器人身份无效，请重新选择");
+    if (m_qmlSettingsPanel && m_qmlSettingsPanel->rootObject())
+      m_qmlSettingsPanel->rootObject()->setProperty("identityError", error);
+    qWarning() << "MainWindow: robot selection rejected:" << robotId << error;
+    return;
+  }
+  resetKeyboardMouseControlState(true);
+  m_exchangeHintLoginActive = true;
+  const QString label = settingsRobotTypeLabel(static_cast<quint8>(robotId));
+  applySettingsRobotSelection(label, static_cast<quint8>(robotId));
+  restartMqttForRobotId(robotId);
+  updateExchangeHintText(label);
 }
 
 void MainWindow::onCommonCommandRequested(int commandType, int param) {
@@ -8181,9 +8099,22 @@ void MainWindow::onCommonCommandRequested(int commandType, int param) {
 }
 
 void MainWindow::onSettingsLogoutRequested() {
+#ifdef RM_HAS_MQTT
+  if (m_networkManager && m_networkManager->isMqttConnecting()) {
+    if (m_qmlSettingsPanel && m_qmlSettingsPanel->rootObject())
+      m_qmlSettingsPanel->rootObject()->setProperty("identityError", QStringLiteral("正在连接，请稍候再退出"));
+    return;
+  }
+#endif
   resetKeyboardMouseControlState(true);
   m_exchangeHintLoginActive = false;
   cancelScheduledMqttReconnect();
+  if (m_gameData) m_gameData->setCurrentRobotId(0);
+  m_selectedRobotTypeFromSettings.clear();
+#ifdef RM_HAS_MQTT
+  if (m_networkManager) m_networkManager->stopMqtt();
+  m_activeMqttClientId.clear();
+#endif
   qDebug() << "Settings requested logout current robot";
   if (m_qmlExchangePanel) {
     m_qmlExchangePanel->hide();

@@ -59,15 +59,14 @@ Rectangle {
 
     // 逻辑：仅 Standard(R3/R4/R5) 可以远程购买 17mm
     readonly property bool is17mmEnabled: {
-        if (selectedRobotType === "") return true; // 默认开启
-        return selectedRobotType.indexOf("Standard") >= 0
-                || selectedRobotType.indexOf("Sentry") >= 0;
+        if (!root.gameDataContext) return false;
+        var id = Number(root.gameDataContext.currentRobotId);
+        return id === 3 || id === 7 || id === 103 || id === 107;
     }
 
     // 逻辑：Hero(R1) 可以买 42mm
     readonly property bool is42mmEnabled: {
-        if (selectedRobotType === "") return true;
-        return selectedRobotType.indexOf("Hero") >= 0;
+        return false; // 旧英雄专属兑换冻结，重装业务另行适配。
     }
 
     // 确认弹窗要展示的提示文本

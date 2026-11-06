@@ -76,23 +76,15 @@ int settingsRobotIdForShortcut(const QKeyEvent *event) {
   case Qt::Key_1:
     return 1;
   case Qt::Key_2:
-    return 2;
-  case Qt::Key_3:
     return 3;
+  case Qt::Key_3:
+    return 7;
   case Qt::Key_4:
-    return 4;
-  case Qt::Key_5:
-    return 6;
-  case Qt::Key_6:
     return 101;
-  case Qt::Key_7:
-    return 102;
-  case Qt::Key_8:
+  case Qt::Key_5:
     return 103;
-  case Qt::Key_9:
-    return 104;
-  case Qt::Key_0:
-    return 106;
+  case Qt::Key_6:
+    return 107;
   default:
     return 0;
   }
