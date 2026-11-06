@@ -1,6 +1,7 @@
 #include "TacticalAnalyzer.h"
 #include "ExecutionFusion.h"
 #include "GameData.h"
+#include "RobotIdentity.h"
 #include "ThreatRanker.h"
 
 #include <QDateTime>
@@ -26,55 +27,13 @@ QString tacticalRobotIdLabel(int robotId, bool isAlly) {
 
 QString tacticalRobotTypeIcon(RobotType type) {
     switch (type) {
-    case RobotType::HERO:
-        return QStringLiteral("hero");
-    case RobotType::ENGINEER:
-        return QStringLiteral("engineer");
-    case RobotType::AERIAL:
-        return QStringLiteral("aerial");
-    case RobotType::SENTRY:
-        return QStringLiteral("sentry");
+    case RobotType::HEAVY: return QStringLiteral("heavy");
+    case RobotType::AERIAL: return QStringLiteral("aerial");
+    case RobotType::SENTRY: return QStringLiteral("sentry");
     case RobotType::INFANTRY_3:
     case RobotType::INFANTRY_4:
-    case RobotType::INFANTRY_5:
-    default:
-        return QStringLiteral("infantry");
-    }
-}
-
-RobotType tacticalDefaultTypeForSlot(int slot) {
-    switch (slot) {
-    case 1:
-        return RobotType::HERO;
-    case 2:
-        return RobotType::ENGINEER;
-    case 6:
-        return RobotType::AERIAL;
-    case 7:
-        return RobotType::SENTRY;
-    case 3:
-    case 4:
-    case 5:
-    default:
-        return RobotType::INFANTRY_3;
-    }
-}
-
-QString tacticalRobotTypeLabel(RobotType type, int slot) {
-    switch (type) {
-    case RobotType::HERO:
-        return QStringLiteral("英雄");
-    case RobotType::ENGINEER:
-        return QStringLiteral("工程");
-    case RobotType::AERIAL:
-        return QStringLiteral("空中");
-    case RobotType::SENTRY:
-        return QStringLiteral("哨兵");
-    case RobotType::INFANTRY_3:
-    case RobotType::INFANTRY_4:
-    case RobotType::INFANTRY_5:
-    default:
-        return QStringLiteral("步兵%1").arg(slot);
+    case RobotType::INFANTRY_5: return QStringLiteral("infantry");
+    default: return QStringLiteral("unknown");
     }
 }
 
@@ -577,7 +536,7 @@ void TacticalAnalyzer::updateHeader() {
 
 void TacticalAnalyzer::updateResources() {
     auto &r = m_snapshot.resources;
-    const bool redPerspective = m_gameData->currentRobotId() < 100;
+    const bool redPerspective = resolveRobotIdentity(m_gameData->currentRobotId()).team == TeamColor::RED;
 
     r.allyBaseHp = redPerspective ? m_gameData->redBaseHealth()
                                   : m_gameData->blueBaseHealth();
@@ -624,7 +583,7 @@ void TacticalAnalyzer::updateResources() {
 
 void TacticalAnalyzer::updateTopStatus() {
     auto &t = m_snapshot.topStatus;
-    const bool redPerspective = m_gameData->currentRobotId() < 100;
+    const bool redPerspective = resolveRobotIdentity(m_gameData->currentRobotId()).team == TeamColor::RED;
 
     t.allyRemainingEconomy = redPerspective
         ? static_cast<int>(m_gameData->redRemainingEconomy())
@@ -759,7 +718,7 @@ void TacticalAnalyzer::updateMainDecision() {
     if (!m_ranker || gs.gameProgress != GameStage::BATTLE) return;
 
     // 收集环境数据用于决策
-    const bool redPerspective = m_gameData->currentRobotId() < 100;
+    const bool redPerspective = resolveRobotIdentity(m_gameData->currentRobotId()).team == TeamColor::RED;
     int allyBaseHp = redPerspective ? m_gameData->redBaseHealth()
                                     : m_gameData->blueBaseHealth();
     int allyBaseMax = redPerspective ? m_gameData->redBaseMaxHealth()
@@ -868,15 +827,17 @@ void TacticalAnalyzer::updateTopTargets() {
     if (!m_ranker || !m_freshness) return;
 
     const auto &allRobots = m_gameData->getAllRobots();
-    int myId = m_gameData->currentRobotId();
-    bool isRed = (myId < 100);
+    const auto self = resolveRobotIdentity(m_gameData->currentRobotId());
+    if (!self.team || self.kind != IdentityKind::Robot) return;
 
     // 分离己方/敌方机器人
     QMap<int, QVariantMap> allyRobots, enemyRobots;
     for (const auto &robot : allRobots) {
         QVariantMap info = m_gameData->getRobotInfo(robot.robotId);
         if (info.isEmpty()) continue;
-        const bool isAlly = (robot.robotId < 100) == isRed;
+        const auto identity = resolveRobotIdentity(robot.robotId);
+        if (identity.kind != IdentityKind::Robot || !identity.team) continue;
+        const bool isAlly = identity.team == self.team;
         info["label"] = tacticalRobotIdLabel(robot.robotId, isAlly);
         info["icon"] = tacticalRobotTypeIcon(robot.type);
         info["x"] = robot.posX;
@@ -901,7 +862,7 @@ void TacticalAnalyzer::updateTopTargets() {
         }
     }
 
-    const bool redPerspective = m_gameData->currentRobotId() < 100;
+    const bool redPerspective = resolveRobotIdentity(m_gameData->currentRobotId()).team == TeamColor::RED;
     int allyBaseHp = redPerspective ? m_gameData->redBaseHealth()
                                     : m_gameData->blueBaseHealth();
 
@@ -931,8 +892,8 @@ void TacticalAnalyzer::updateRadarData() {
     auto &rd = m_snapshot.radar;
     rd.mapImageSource = "qrc:/images/minimap_bg.png";
     const auto &allRobots = m_gameData->getAllRobots();
-    int myId = m_gameData->currentRobotId();
-    bool isRed = (myId < 100);
+    const auto self = resolveRobotIdentity(m_gameData->currentRobotId());
+    if (!self.team || self.kind != IdentityKind::Robot) return;
 
     QVariantList ally, enemy;
     qint64 newestRadarUpdateMs = 0;
@@ -941,7 +902,9 @@ void TacticalAnalyzer::updateRadarData() {
         if (!robotHasUsablePosition(robot)) continue;
 
         MapRobot mr;
-        bool isAlly = (robot.robotId < 100) == isRed;
+        const auto identity = resolveRobotIdentity(robot.robotId);
+        if (identity.kind != IdentityKind::Robot || !identity.team) continue;
+        const bool isAlly = identity.team == self.team;
         mr.id = tacticalRobotIdLabel(robot.robotId, isAlly);
         mr.label = mr.id;
 
@@ -961,7 +924,7 @@ void TacticalAnalyzer::updateRadarData() {
         map["ageMs"] = updateMs > 0
                            ? QDateTime::currentMSecsSinceEpoch() - updateMs
                            : 999999;
-        map["number"] = robot.robotId % 100;
+        map["number"] = identity.normalizedId.value_or(0);
         map["team"] = isAlly ? QStringLiteral("ally") : QStringLiteral("enemy");
         map["visible"] = true;
         map["predicted"] = false;
@@ -998,7 +961,7 @@ void TacticalAnalyzer::updateRadarData() {
 }
 
 void TacticalAnalyzer::updateRobotLists() {
-    const bool redPerspective = m_gameData->currentRobotId() < 100;
+    const bool redPerspective = resolveRobotIdentity(m_gameData->currentRobotId()).team == TeamColor::RED;
     const int currentRound = m_gameData->currentRound();
     if (currentRound > 0 && m_robotFlashStateRound != currentRound) {
         m_robotHadPositiveHpById.clear();
@@ -1007,14 +970,14 @@ void TacticalAnalyzer::updateRobotLists() {
         m_robotFlashStateRound = currentRound;
     }
     const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
-    const QList<int> visibleSlots{1, 2, 3, 4, 6, 7};
+    const QList<int> visibleSlots{1, 3, 4, 6, 7};
 
     auto buildList = [&](bool redTeam, bool ally) {
         QVariantList list;
         for (int slot : visibleSlots) {
             const int robotId = redTeam ? slot : 100 + slot;
             const RobotData *robot = m_gameData->getRobotById(static_cast<quint8>(robotId));
-            const RobotType type = robot ? robot->type : tacticalDefaultTypeForSlot(slot);
+            const auto identity = resolveRobotIdentity(robotId);
             const qint64 lastMs = robot ? robotLastUpdateMs(*robot) : 0;
             const int ageMs = lastMs > 0 ? static_cast<int>(nowMs - lastMs) : 999999;
             const bool onlineByStatic = robot && robot->tabStaticConnected;
@@ -1067,8 +1030,8 @@ void TacticalAnalyzer::updateRobotLists() {
             item["id"] = tacticalRobotIdLabel(robotId, ally);
             item["robotId"] = robotId;
             item["slot"] = slot;
-            item["type"] = tacticalRobotTypeIcon(type);
-            item["label"] = tacticalRobotTypeLabel(type, slot);
+            item["type"] = identity.role ? tacticalRobotTypeIcon(*identity.role) : QStringLiteral("unknown");
+            item["label"] = identity.displayName;
             item["hp"] = hp;
             item["maxHp"] = maxHp;
             item["heatPct"] = heatPct;
@@ -1089,7 +1052,7 @@ void TacticalAnalyzer::updateRobotLists() {
 
 void TacticalAnalyzer::updateAnalysisMetrics() {
     const auto &r = m_snapshot.resources;
-    const bool redPerspective = m_gameData->currentRobotId() < 100;
+    const bool redPerspective = resolveRobotIdentity(m_gameData->currentRobotId()).team == TeamColor::RED;
     const int allyEconomy = redPerspective ? m_gameData->redEconomy()
                                            : m_gameData->blueEconomy();
     const int enemyEconomy = redPerspective ? m_gameData->blueEconomy()
@@ -1174,11 +1137,13 @@ void TacticalAnalyzer::updateAllyExecution() {
     } else {
         // 融合器不可用时直接从 GameData 生成执行能力。
         const auto &allRobots = m_gameData->getAllRobots();
-        int myId = m_gameData->currentRobotId();
-        bool isRed = (myId < 100);
+        const auto self = resolveRobotIdentity(m_gameData->currentRobotId());
+        if (!self.team || self.kind != IdentityKind::Robot) return;
 
         for (const auto &robot : allRobots) {
-            bool isAlly = (robot.robotId < 100) == isRed;
+            const auto identity = resolveRobotIdentity(robot.robotId);
+        if (identity.kind != IdentityKind::Robot || !identity.team) continue;
+        const bool isAlly = identity.team == self.team;
             if (!isAlly) continue;
             if (robot.status != RobotStatus::NORMAL) continue;
 

@@ -1,3 +1,4 @@
+#include "core/RobotIdentity.h"
 #include "core/GameData.h"
 #include "core/TacticalAnalyzer.h"
 
@@ -137,8 +138,8 @@ private slots:
         const QVariantList allyRobots = analyzer.allyRobotList();
         const QVariantList enemyRobots = analyzer.enemyRobotList();
 
-        QCOMPARE(allyRobots.size(), 6);
-        QCOMPARE(enemyRobots.size(), 6);
+        QCOMPARE(allyRobots.size(), 5);
+        QCOMPARE(enemyRobots.size(), 5);
 
         auto containsSlotFive = [](const QVariantList &robots) {
             for (const QVariant &entry : robots) {
@@ -151,6 +152,12 @@ private slots:
 
         QVERIFY(!containsSlotFive(allyRobots));
         QVERIFY(!containsSlotFive(enemyRobots));
+        for (const auto &entry : allyRobots + enemyRobots) {
+            const auto robot = entry.toMap();
+            QVERIFY(robot.value("slot").toInt() != 2);
+            const auto identity = RM::resolveRobotIdentity(robot.value("robotId").toInt());
+            QCOMPARE(robot.value("label").toString(), identity.displayName);
+        }
     }
 
     void testRobotListsDefaultMaxHpToOneHundredFifty() {
@@ -162,8 +169,8 @@ private slots:
         const QVariantList allyRobots = analyzer.allyRobotList();
         const QVariantList enemyRobots = analyzer.enemyRobotList();
 
-        QCOMPARE(allyRobots.size(), 6);
-        QCOMPARE(enemyRobots.size(), 6);
+        QCOMPARE(allyRobots.size(), 5);
+        QCOMPARE(enemyRobots.size(), 5);
 
         for (const QVariant &entry : allyRobots) {
             const QVariantMap robot = entry.toMap();

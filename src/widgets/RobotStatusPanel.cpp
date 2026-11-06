@@ -95,42 +95,11 @@ void RobotStatusPanel::paintEvent(QPaintEvent *event) {
                    QString::number(m_robotId));
 
   // 机器人类型图标
-  static QPixmap redIcon(":/images/red_message_guard.png");
-  static QPixmap blueIcon(":/images/blue_teammate_avatar_hero_adbuff.png");
-
-  QPixmap *icon = (m_team == Red) ? &redIcon : &blueIcon;
-  if (!icon->isNull()) { // 缩小图标，避免与 ID 重叠
-    QSize iconSize(35, 20);
-    QPixmap scaled =
-        icon->scaled(iconSize, Qt::KeepAspectRatio, Qt::SmoothTransformation);
-
-    // 图标在下半区域居中
-    int x = r.center().x() - scaled.width() / 2;
-    int y = r.center().y() - scaled.height() / 2 + 8; // 下移以避开 ID
-
-    painter.drawPixmap(x, y, scaled);
-  } else {
-    // 图标缺失时回退为文字
-    f.setPixelSize(10);
-    painter.setFont(f);
-    QString typeStr = "STD";
-    switch (m_robotType) {
-    case RM::RobotType::Hero:
-      typeStr = "HERO";
-      break;
-    case RM::RobotType::Engineer:
-      typeStr = "ENG";
-      break;
-    case RM::RobotType::Sentry:
-      typeStr = "SEN";
-      break;
-    case RM::RobotType::Aerial:
-      typeStr = "AIR";
-      break;
-    default:
-      break;
-    }
-    painter.drawText(r.adjusted(0, 20, 0, -5), Qt::AlignCenter, typeStr);
+  static QPixmap icon(":/images/robot_avatar.png");
+  if (!icon.isNull()) {
+    const QPixmap scaled = icon.scaled(QSize(35, 20), Qt::KeepAspectRatio, Qt::SmoothTransformation);
+    painter.drawPixmap(r.center().x() - scaled.width() / 2,
+                       r.center().y() - scaled.height() / 2 + 8, scaled);
   }
 
   // 底部血量条
@@ -211,60 +180,6 @@ void RobotStatusPanel::updateStyle() {
     m_borderColor = Colors::NEUTRAL_GRAY;
     m_backgroundColor = Colors::PANEL_BACKGROUND.darker(200);
     break;
-  }
-}
-
-QString RobotStatusPanel::getRobotTypeIcon() const {
-  switch (m_robotType) {
-  case RobotType::Standard:
-    return "步";
-  case RobotType::Hero:
-    return "英";
-  case RobotType::Engineer:
-    return "工";
-  case RobotType::Aerial:
-    return "空";
-  case RobotType::Sentry:
-    return "哨";
-  case RobotType::Dart:
-    return "镖";
-  case RobotType::Gate:
-    return "门";
-  case RobotType::Radar:
-    return "雷";
-  case RobotType::Outpost:
-    return "哨";
-  case RobotType::Base:
-    return "基";
-  default:
-    return "?";
-  }
-}
-
-QString RobotStatusPanel::getRobotTypeName() const {
-  switch (m_robotType) {
-  case RobotType::Standard:
-    return "步兵";
-  case RobotType::Hero:
-    return "英雄";
-  case RobotType::Engineer:
-    return "工程";
-  case RobotType::Aerial:
-    return "空中";
-  case RobotType::Sentry:
-    return "哨兵";
-  case RobotType::Dart:
-    return "飞镖";
-  case RobotType::Gate:
-    return "闸门";
-  case RobotType::Radar:
-    return "雷达";
-  case RobotType::Outpost:
-    return "前哨";
-  case RobotType::Base:
-    return "基地";
-  default:
-    return "未知";
   }
 }
 

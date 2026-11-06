@@ -1,3 +1,4 @@
+#include "../core/RobotIdentity.h"
 #include "RobotStatusWidget.h"
 #include <QFont>
 #include <QPaintEvent>
@@ -493,24 +494,7 @@ void RobotStatusWidget::drawRobotIcon(QPainter &painter) {
   painter.setPen(Qt::white);
   painter.setFont(QFont("Arial", 8, QFont::Bold));
 
-  QString typeText;
-  switch (m_robotType) {
-  case Infantry:
-    typeText = "步兵";
-    break;
-  case Hero:
-    typeText = "英雄";
-    break;
-  case Engineer:
-    typeText = "工程";
-    break;
-  case Drone:
-    typeText = "无人机";
-    break;
-  case Sentry:
-    typeText = "哨兵";
-    break;
-  }
+  const QString typeText = RM::resolveRobotIdentity(m_robotId).displayName;
 
   painter.drawText(iconRect, Qt::AlignCenter, typeText);
 
@@ -677,23 +661,6 @@ void RobotStatusWidget::drawModuleStatus(QPainter &painter) {
     painter.setPen(Qt::black);
     painter.setFont(QFont("Arial", 5));
     painter.drawText(moduleRect, Qt::AlignCenter, QString::number(i + 1));
-  }
-}
-
-QString RobotStatusWidget::getRobotTypeName() const {
-  switch (m_robotType) {
-  case Hero:
-    return "Hero";
-  case Engineer:
-    return "Engineer";
-  case Infantry:
-    return "Infantry";
-  case Drone:
-    return "Drone";
-  case Sentry:
-    return "Sentry";
-  default:
-    return "Unknown";
   }
 }
 

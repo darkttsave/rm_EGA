@@ -24,24 +24,7 @@ Item {
         : "OFFLINE"
 
     function avatarSource() {
-        var type = String(root.robot.type || "infantry")
-        if (type === "aerial") {
-            type = "airplane"
-        }
-        if (type === "drone") {
-            type = "airplane"
-        }
-        if (type === "infantry") {
-            type = "soldier"
-        }
-        if (type !== "hero" && type !== "engineer" && type !== "soldier"
-                && type !== "airplane" && type !== "guard") {
-            type = "soldier"
-        }
-        if (type === "guard") {
-            return "qrc:/images/top_robots/" + root.sideName + "_guard_avatar.png"
-        }
-        return "qrc:/images/top_robots/" + root.sideName + "_teammate_avatar_" + type + ".png"
+        return "qrc:/images/robot_avatar.png"
     }
 
     function levelSource() {

@@ -340,27 +340,23 @@ Item {
                     spacing: 2
                     RobotStatusItem {
                         robotId: 7
-                        avatarSource: "qrc:/images/top_robots/red_guard_avatar.png"
+                        avatarSource: "qrc:/images/robot_avatar.png"
                     }
                     RobotStatusItem {
                         robotId: 6
-                        avatarSource: "qrc:/images/top_robots/red_teammate_avatar_airplane.png"
+                        avatarSource: "qrc:/images/robot_avatar.png"
                     }
                     RobotStatusItem {
                         robotId: 4
-                        avatarSource: "qrc:/images/top_robots/red_teammate_avatar_soldier.png"
+                        avatarSource: "qrc:/images/robot_avatar.png"
                     }
                     RobotStatusItem {
                         robotId: 3
-                        avatarSource: "qrc:/images/top_robots/red_teammate_avatar_soldier.png"
-                    }
-                    RobotStatusItem {
-                        robotId: 2
-                        avatarSource: "qrc:/images/top_robots/red_teammate_avatar_engineer.png"
+                        avatarSource: "qrc:/images/robot_avatar.png"
                     }
                     RobotStatusItem {
                         robotId: 1
-                        avatarSource: "qrc:/images/top_robots/red_teammate_avatar_hero.png"
+                        avatarSource: "qrc:/images/robot_avatar.png"
                     }
                 }
 
@@ -625,33 +621,23 @@ Item {
                     spacing: 2
                     RobotStatusItem {
                         robotId: 101
-                        avatarSource: "qrc:/images/top_robots/blue_teammate_avatar_hero.png"
-                        isBlue: true
-                    }
-                    RobotStatusItem {
-                        robotId: 102
-                        avatarSource: "qrc:/images/top_robots/blue_teammate_avatar_engineer.png"
-                        isBlue: true
+                        avatarSource: "qrc:/images/robot_avatar.png"
                     }
                     RobotStatusItem {
                         robotId: 103
-                        avatarSource: "qrc:/images/top_robots/blue_teammate_avatar_soldier.png"
-                        isBlue: true
+                        avatarSource: "qrc:/images/robot_avatar.png"
                     }
                     RobotStatusItem {
                         robotId: 104
-                        avatarSource: "qrc:/images/top_robots/blue_teammate_avatar_soldier.png"
-                        isBlue: true
+                        avatarSource: "qrc:/images/robot_avatar.png"
                     }
                     RobotStatusItem {
                         robotId: 106
-                        avatarSource: "qrc:/images/top_robots/blue_teammate_avatar_airplane.png"
-                        isBlue: true
+                        avatarSource: "qrc:/images/robot_avatar.png"
                     }
                     RobotStatusItem {
                         robotId: 107
-                        avatarSource: "qrc:/images/top_robots/blue_guard_avatar.png"
-                        isBlue: true
+                        avatarSource: "qrc:/images/robot_avatar.png"
                     }
                 }
             }

@@ -442,11 +442,11 @@ int MainWindow::allyBaseArmorOpenedSoundLoopCount() {
 }
 
 QString MainWindow::paidRespawnSoundFileName(int robotId) {
-  switch (robotId % 100) {
+  const auto identity = RM::resolveRobotIdentity(robotId);
+  if (identity.kind != RM::IdentityKind::Robot || !identity.normalizedId) return {};
+  switch (*identity.normalizedId) {
   case 1:
-    return QStringLiteral("enemy_buyback_hero_revived.mp3");
-  case 2:
-    return QStringLiteral("enemy_buyback_engineer_revived.mp3");
+    return {};
   case 3:
     return QStringLiteral("enemy_buyback_infantry_3_revived.mp3");
   case 4:

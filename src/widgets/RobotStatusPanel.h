@@ -48,8 +48,6 @@ signals:
 
 private:
     void updateStyle();
-    QString getRobotTypeIcon() const;
-    QString getRobotTypeName() const;
     QColor getStatusColor() const;
     void drawBuffIcons(QPainter& painter);
 

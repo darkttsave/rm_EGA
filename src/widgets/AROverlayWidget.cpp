@@ -9,6 +9,7 @@
 
 #include "AROverlayWidget.h"
 #include "../core/GameData.h"
+#include "../core/RobotIdentity.h"
 
 #include <QDebug>
 #include <QPainter>
@@ -39,6 +40,8 @@ void AROverlayWidget::updateTargets(const QList<TrackedTarget> &targets) {
   m_overlayInfos.clear();
 
   for (const auto &target : targets) {
+    const auto identity = resolveRobotIdentity(target.robotId);
+    if (identity.kind != IdentityKind::Robot || !identity.team) continue;
     OverlayInfo info = createOverlayInfo(target);
     m_overlayInfos.append(info);
   }
@@ -262,7 +265,7 @@ AROverlayWidget::createOverlayInfo(const TrackedTarget &target) const {
 
   info.robotId = target.robotId;
   info.name = getRobotName(target.robotId);
-  info.isRed = (target.robotId < 100);
+  info.isRed = resolveRobotIdentity(target.robotId).team == TeamColor::RED;
 
   // 转换边界框到屏幕坐标
   info.screenBox = normalizedToScreen(target.smoothedBox);
@@ -290,18 +293,10 @@ AROverlayWidget::createOverlayInfo(const TrackedTarget &target) const {
 }
 
 QString AROverlayWidget::getRobotName(int robotId) const {
-  // 根据机器人 ID 生成名称
-  static const QMap<int, QString> names = {
-      {1, "英雄"},   {2, "工程"},    {3, "步兵3"},   {4, "步兵4"},
-      {5, "步兵5"},  {6, "空中"},    {7, "哨兵"},    {101, "英雄"},
-      {102, "工程"}, {103, "步兵3"}, {104, "步兵4"}, {105, "步兵5"},
-      {106, "空中"}, {107, "哨兵"}};
-
-  bool isRed = (robotId < 100);
-  QString prefix = isRed ? "红" : "蓝";
-  QString typeName = names.value(robotId, QString("机器人%1").arg(robotId));
-
-  return prefix + typeName;
+  const auto identity = resolveRobotIdentity(robotId);
+  const QString team = !identity.team ? QStringLiteral("未知阵营") :
+      (*identity.team == TeamColor::RED ? QStringLiteral("红方") : QStringLiteral("蓝方"));
+  return team + identity.displayName;
 }
 
 QColor AROverlayWidget::getTeamColor(bool isRed) const {

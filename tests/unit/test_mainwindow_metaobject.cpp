@@ -36,9 +36,9 @@ private slots:
 
   void testPaidRespawnRobotSoundFileNames() {
     QCOMPARE(MainWindow::paidRespawnSoundFileName(101),
-             QStringLiteral("enemy_buyback_hero_revived.mp3"));
+             QString());
     QCOMPARE(MainWindow::paidRespawnSoundFileName(102),
-             QStringLiteral("enemy_buyback_engineer_revived.mp3"));
+             QString());
     QCOMPARE(MainWindow::paidRespawnSoundFileName(103),
              QStringLiteral("enemy_buyback_infantry_3_revived.mp3"));
     QCOMPARE(MainWindow::paidRespawnSoundFileName(104),

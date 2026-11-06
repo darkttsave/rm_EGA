@@ -27,7 +27,7 @@ Rectangle {
             x: 32
             spacing: 14
             Text { text: "RM27 开发者状态面板"; color: "white"; font.pixelSize: 28; topPadding: 20 }
-            Text { text: "Ctrl+Shift+F10 或 Esc 关闭 · 键鼠机器人控制已禁用 · GameData（2026 语义）"; color: "#a8c4d8"; font.pixelSize: 16 }
+            Text { text: "Ctrl+Shift+F10 或 Esc 关闭 · 键鼠机器人控制已禁用 · GameData（部分旧业务尚未适配）"; color: "#a8c4d8"; font.pixelSize: 16 }
             Text {
                 objectName: "rm27GameState"
                 color: "white"; font.pixelSize: 20
@@ -60,13 +60,13 @@ Rectangle {
             }
             Text { text: "机器人状态（实际 GameData 值）"; color: "#8de0ff"; font.pixelSize: 21; topPadding: 10 }
             Repeater {
-                model: [1, 2, 3, 4, 6, 7, 101, 102, 103, 104, 106, 107]
+                model: [1, 3, 4, 5, 6, 7, 8, 9, 101, 103, 104, 105, 106, 107, 108, 109]
                 delegate: Text {
                     required property int modelData
                     objectName: "rm27Robot" + modelData
                     property var robot: { root.revision; return root.dataSource ? root.dataSource.getRobotInfo(modelData) : ({}) }
                     color: "white"; font.pixelSize: 18
-                    text: "ID " + modelData + "    血量: " + (robot.hp === undefined ? "未知" : robot.hp + "/" + robot.maxHp) + "    离线: " + (robot.isOffline === undefined ? "未知" : robot.isOffline)
+                    text: (robot.identityTeam || "未知阵营") + " " + (robot.identityName || "未知") + " (ID " + modelData + ")    血量: " + (robot.hp === undefined ? "未知" : robot.hp + "/" + robot.maxHp) + "    离线: " + (robot.isOffline === undefined ? "未知" : robot.isOffline)
                 }
             }
             Text { text: "RMUL 装配事件观测"; color: "#8de0ff"; font.pixelSize: 21; topPadding: 12 }

@@ -207,7 +207,6 @@ private:
   void drawBuffIcons(QPainter &painter);
   void drawModuleIndicators(QPainter &painter);
 
-  QString getRobotTypeName() const;
   bool isLowHealth() const;
   bool isCriticalHealth() const;
   bool needsBlinking() const;

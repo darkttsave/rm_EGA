@@ -29,8 +29,9 @@ Item {
     property string iconSource: ""
     property string avatarSource: ""
     property int robotId: 1
-    property bool isBlue: false
-    property int normalizedRobotId: robotId > 100 ? (robotId - 100) : robotId
+    objectName: "topRobot" + robotId
+    property bool isBlue: robotInfo && robotInfo.identityTeam === "蓝方"
+    property int normalizedRobotId: robotInfo && robotInfo.identityNumber !== undefined ? robotInfo.identityNumber : 0
     property string teamPrefix: isBlue ? "blue" : "red"
     property string cardBackgroundSource: "qrc:/images/top_robots/" + teamPrefix + "_teammate_bg.png"
     property string hpBarSource: "qrc:/images/top_robots/" + teamPrefix + "_tab_bar.png"

@@ -64,6 +64,54 @@ private slots:
     QCOMPARE(OfficialMessageHandler::handle("Event", bytes(event), data, {}), OfficialMessageHandler::Result::Parsed);
     QVERIFY(data.event16Received());
   }
+  void identityDisplayUsesGameData() {
+    Q_INIT_RESOURCE(qml);
+    Q_INIT_RESOURCE(resources);
+    GameData data;
+    QQuickWidget top;
+    top.rootContext()->setContextProperty("gameData", &data);
+    top.setSource(QUrl(QStringLiteral("qrc:/qml/TopInfoBar.qml")));
+    QCOMPARE(top.status(), QQuickWidget::Ready);
+    QQuickWidget panel;
+    panel.rootContext()->setContextProperty("gameData", &data);
+    panel.setSource(QUrl(QStringLiteral("qrc:/qml/RM27DevPanel.qml")));
+    QCOMPARE(panel.status(), QQuickWidget::Ready);
+    QVERIFY(!top.rootObject()->findChild<QObject *>("topRobot2"));
+    QVERIFY(!top.rootObject()->findChild<QObject *>("topRobot102"));
+    std::function<QQuickItem *(QQuickItem *, const QString &)> findVisual =
+      [&](QQuickItem *item, const QString &name) -> QQuickItem * {
+        if (item->objectName() == name) return item;
+        for (auto *child : item->childItems())
+          if (auto *found = findVisual(child, name)) return found;
+        return nullptr;
+      };
+    QVERIFY(!findVisual(panel.rootObject(), "rm27Robot2"));
+    for (int id : {1, 3, 4, 7, 101, 103, 104, 107}) {
+      auto *card = top.rootObject()->findChild<QObject *>(QString("topRobot%1").arg(id));
+      auto *row = findVisual(panel.rootObject(), QString("rm27Robot%1").arg(id));
+      QVERIFY(card); QVERIFY(row);
+      const QVariantMap info = data.getRobotInfo(id);
+      QCOMPARE(card->property("normalizedRobotId").toInt(), info.value("identityNumber").toInt());
+      QCOMPARE(card->property("isBlue").toBool(), info.value("identityTeam").toString() == QStringLiteral("蓝方"));
+      QCOMPARE(card->property("avatarSource").toString(), QStringLiteral("qrc:/images/robot_avatar.png"));
+      QVERIFY(row->property("text").toString().contains(info.value("identityName").toString()));
+      QVERIFY(row->property("text").toString().contains(info.value("identityTeam").toString()));
+    }
+    QCOMPARE(data.getRobotInfo(2).value("identityName").toString(), QStringLiteral("保留位"));
+    QCOMPARE(data.getRobotInfo(102).value("identityName").toString(), QStringLiteral("保留位"));
+    QCOMPARE(data.getRobotInfo(201).value("identityTeam").toString(), QStringLiteral("未知阵营"));
+    QCOMPARE(data.getRobotInfo(201).value("robotId").toInt(), 201);
+    robomaster::RobotStaticStatus status;
+    status.set_robot_id(104); status.set_connection_state(1); status.set_max_health(500);
+    QCOMPARE(OfficialMessageHandler::handle("RobotStaticStatus", bytes(status), data), OfficialMessageHandler::Result::Parsed);
+    robomaster::GlobalUnitStatus health;
+    for (int i = 0; i < 8; ++i) health.add_robot_health(101 + i);
+    QCOMPARE(OfficialMessageHandler::handle("GlobalUnitStatus", bytes(health), data), OfficialMessageHandler::Result::Parsed);
+    auto *card = top.rootObject()->findChild<QObject *>("topRobot104");
+    auto *row = findVisual(panel.rootObject(), "rm27Robot104");
+    QTRY_COMPARE(card->property("currentHP").toInt(), int(data.getRobotById(104)->currentHP));
+    QTRY_VERIFY(row->property("text").toString().contains(QString::number(data.getRobotById(104)->currentHP)));
+  }
   void supportedMessagesAndLogging() {
     GameData data;
     QSignalSpy fortress(&data, &GameData::allyFortressOccupationAlertTriggered);

@@ -122,34 +122,8 @@ quint16 robotTabShootSpeedLimit(RobotType type) {
 }
 
 QString robotTabAvatarSource(const RobotData &robot) {
-  const QString teamPrefix =
-      robot.team == TeamColor::BLUE ? QStringLiteral("blue")
-                                    : QStringLiteral("red");
-
-  switch (robot.type) {
-  case RobotType::HERO:
-    return QStringLiteral("qrc:/images/top_robots/%1_teammate_avatar_hero.png")
-        .arg(teamPrefix);
-  case RobotType::ENGINEER:
-    return QStringLiteral(
-               "qrc:/images/top_robots/%1_teammate_avatar_engineer.png")
-        .arg(teamPrefix);
-  case RobotType::INFANTRY_3:
-  case RobotType::INFANTRY_4:
-  case RobotType::INFANTRY_5:
-    return QStringLiteral(
-               "qrc:/images/top_robots/%1_teammate_avatar_soldier.png")
-        .arg(teamPrefix);
-  case RobotType::AERIAL:
-    return QStringLiteral(
-               "qrc:/images/top_robots/%1_teammate_avatar_airplane.png")
-        .arg(teamPrefix);
-  case RobotType::SENTRY:
-    return QStringLiteral("qrc:/images/top_robots/%1_guard_avatar.png")
-        .arg(teamPrefix);
-  default:
-    return QStringLiteral("qrc:/images/robot_avatar.png");
-  }
+  Q_UNUSED(robot)
+  return QStringLiteral("qrc:/images/robot_avatar.png");
 }
 
 quint16 robotTabDefaultMaxHp(RobotType type) {
@@ -1035,6 +1009,10 @@ QVariantMap GameData::getRobotInfo(int robotId) const {
     const int panelLevel = static_cast<int>(robotDisplayLevelForPanels(*robot));
     // 基础血量
     map["robotId"] = robot->robotId;
+    const auto identity = RM::resolveRobotIdentity(robot->robotId);
+    map["identityName"] = identity.displayName;
+    map["identityNumber"] = identity.normalizedId.value_or(0);
+    map["identityTeam"] = identity.team ? (*identity.team == TeamColor::RED ? QStringLiteral("红方") : QStringLiteral("蓝方")) : QStringLiteral("未知阵营");
     map["hp"] = robot->currentHP;
     map["maxHp"] = robot->maxHP;
     map["isDead"] = (robot->status == RobotStatus::DESTROYED);
@@ -1090,8 +1068,12 @@ QVariantMap GameData::getRobotInfo(int robotId) const {
     map["panelIsDead"] = panelConnected && panelHp <= 0;
     map["panelLevel"] = panelLevel;
   } else {
+    const auto identity = RM::resolveRobotIdentity(robotId);
     map["hp"] = 0;
-    map["robotId"] = m_currentRobotId;
+    map["robotId"] = robotId;
+    map["identityName"] = identity.displayName;
+    map["identityNumber"] = identity.normalizedId.value_or(0);
+    map["identityTeam"] = identity.team ? (*identity.team == TeamColor::RED ? QStringLiteral("红方") : QStringLiteral("蓝方")) : QStringLiteral("未知阵营");
     map["maxHp"] = 100;
     map["isDead"] = true;
     map["isOffline"] = true;
