@@ -9,6 +9,7 @@
  */
 
 #include "GameData.h"
+#include "RobotIdentity.h"
 #include "robomaster.pb.h"
 #include "GameConstants.h"
 #include "../config/ConfigManager.h"
@@ -22,7 +23,6 @@
 #include "PopupStateMachine.h"
 
 static QString getRobotName(int robotId);
-static QString getRobotColor(int robotId);
 
 namespace {
 float sanitizeFiniteRuneAverage(float value) {
@@ -30,51 +30,6 @@ float sanitizeFiniteRuneAverage(float value) {
     return value;
   }
   return 0.0f;
-}
-
-RobotType robotTypeFromProtocolId(quint32 robotId, quint32 fallbackType) {
-  const quint32 normalizedId = robotId % 100;
-  switch (normalizedId) {
-  case 1:
-    return RobotType::HERO;
-  case 2:
-    return RobotType::ENGINEER;
-  case 3:
-    return RobotType::INFANTRY_3;
-  case 4:
-    return RobotType::INFANTRY_4;
-  case 5:
-    return RobotType::INFANTRY_5;
-  case 6:
-    return RobotType::AERIAL;
-  case 7:
-    return RobotType::SENTRY;
-  default:
-    break;
-  }
-
-  switch (fallbackType) {
-  case 1:
-    return RobotType::HERO;
-  case 2:
-    return RobotType::ENGINEER;
-  case 3:
-    return RobotType::INFANTRY_3;
-  case 4:
-    return RobotType::INFANTRY_4;
-  case 5:
-    return RobotType::INFANTRY_5;
-  case 6:
-    return RobotType::AERIAL;
-  case 7:
-    return RobotType::SENTRY;
-  case 8:
-    return RobotType::DART;
-  case 9:
-    return RobotType::RADAR;
-  default:
-    return RobotType::INFANTRY_3;
-  }
 }
 
 QList<int> radarRobotOrderForPerspective(bool isBluePerspective) {
@@ -289,6 +244,39 @@ bool isBattleStage(GameStage stage) {
          stage != GameStage::SETTLEMENT;
 }
 
+struct KillEventIdentity {
+  RM::RobotIdentity victim;
+  RM::RobotIdentity killer;
+};
+
+std::optional<KillEventIdentity> parseKillEvent(const QString &param) {
+  const auto parts = param.split(',');
+  if (parts.size() != 2) return std::nullopt;
+  bool victimOk = false, killerOk = false;
+  const qint64 victimId = parts[0].trimmed().toLongLong(&victimOk);
+  const qint64 killerId = parts[1].trimmed().toLongLong(&killerOk);
+  if (!victimOk || !killerOk) return std::nullopt;
+  auto victim = RM::resolveRobotIdentity(victimId);
+  auto killer = RM::resolveRobotIdentity(killerId);
+  if (victim.kind != RM::IdentityKind::Robot || !victim.team ||
+      !((killer.kind == RM::IdentityKind::Robot && killer.team) ||
+        (killer.kind == RM::IdentityKind::FieldObject && killer.normalizedId &&
+         *killer.normalizedId == 10))) return std::nullopt;
+  return KillEventIdentity{victim, killer};
+}
+
+QString killEventMessage(const KillEventIdentity &event) {
+  const auto teamText = [](TeamColor team) {
+    return team == TeamColor::RED ? QStringLiteral("红方") : QStringLiteral("蓝方");
+  };
+  if (event.killer.kind == RM::IdentityKind::FieldObject ||
+      event.killer.rawId == event.victim.rawId)
+    return QStringLiteral("%1%2机器人阵亡").arg(teamText(*event.victim.team), event.victim.displayName);
+  return QStringLiteral("%1%2机器人击毁了%3%4机器人")
+      .arg(teamText(*event.killer.team), event.killer.displayName,
+           teamText(*event.victim.team), event.victim.displayName);
+}
+
 QString officialEventPopupMessageForEvent(const robomaster::Event &data,
                                           const RobotData *currentRobot,
                                           int currentRuneType) {
@@ -302,27 +290,8 @@ QString officialEventPopupMessageForEvent(const robomaster::Event &data,
 
   switch (eventId) {
   case 1: {
-    const QStringList parts = param.split(",");
-    if (parts.size() == 2) {
-      bool okVictim = false;
-      bool okKiller = false;
-      const quint8 victimId = static_cast<quint8>(parts[0].toUInt(&okVictim));
-      const quint8 killerId = static_cast<quint8>(parts[1].toUInt(&okKiller));
-      if (okVictim && okKiller) {
-        if (killerId % 100 == 10 || killerId == victimId) {
-          const TeamColor victimTeam = victimId >= 100 ? TeamColor::BLUE : TeamColor::RED;
-          return QStringLiteral("%1方%2机器人阵亡")
-              .arg(teamText(victimTeam), getRobotName(victimId));
-        }
-
-        const TeamColor killerTeam = killerId >= 100 ? TeamColor::BLUE : TeamColor::RED;
-        const TeamColor victimTeam = victimId >= 100 ? TeamColor::BLUE : TeamColor::RED;
-        return QStringLiteral("%1方%2机器人击毁了%3方%4机器人")
-            .arg(teamText(killerTeam), getRobotName(killerId),
-                 teamText(victimTeam), getRobotName(victimId));
-      }
-    }
-    return QStringLiteral("机器人击毁事件");
+    const auto event = parseKillEvent(param);
+    return event ? killEventMessage(*event) : QStringLiteral("机器人击毁事件（身份无效）");
   }
   case 2: {
     bool ok = false;
@@ -621,163 +590,32 @@ QString GameData::heroFrameDataUrl() const {
  */
 void GameData::initializeRobots() {
   m_robots.clear();
-
-  // 红方机器人
-  for (int i = 1; i <= 7; ++i) {
-    if(i ==5){
-      continue;
+  for (int offset : {0, 100}) {
+    for (int number : {1, 3, 4, 5, 6, 7, 8, 9}) {
+      const auto identity = RM::resolveRobotIdentity(offset + number);
+      RobotData robot;
+      robot.robotId = static_cast<quint8>(identity.rawId);
+      robot.team = *identity.team;
+      robot.type = *identity.role;
+      robot.maxHP = 0;
+      robot.currentHP = 0;
+      robot.status = RobotStatus::OFFLINE;
+      robot.maxExperience = 100;
+      robot.maxPower = 0;
+      robot.power = 0;
+      robot.heatLimit = 0;
+      robot.maxBufferEnergy = 0;
+      robot.shootSpeedLimit = 0.0f;
+      robot.tabShootSpeedLimit = 0;
+      robot.lastUpdateTime = QDateTime::currentDateTime();
+      robot.q2HeatThreshold = 100;
+      m_robots.append(robot);
     }
-    RobotData robot;
-    robot.robotId = i;
-    robot.team = TeamColor::RED;
-
-    switch (i) {
-    case 1:
-      robot.type = RobotType::HERO;
-      robot.maxHP = 200;
-      robot.heroRigMode = 0;
-      break;
-    case 2:
-      robot.type = RobotType::ENGINEER;
-      robot.maxHP = 250;
-      break;
-    case 3:
-      robot.type = RobotType::INFANTRY_3;
-      robot.maxHP = 200;
-      robot.infantry17mmMode = 0;
-      break;
-    case 4:
-      robot.type = RobotType::INFANTRY_4;
-      robot.maxHP = 200;
-      robot.infantry17mmMode = 0;
-      break;
-    case 6:
-      robot.type = RobotType::AERIAL;
-      robot.maxHP = 250;
-      break;
-    case 7:
-      robot.type = RobotType::SENTRY;
-      robot.maxHP = 200;
-      break;
-    }
-
-    // 未收到真实静态状态前，默认按"未知且离线"处理，避免顶部列表预亮。
-    robot.maxHP = 0;
-    robot.currentHP = 0;
-    robot.status = RobotStatus::OFFLINE;
-    robot.level = 1;
-    robot.experience = 0;
-    robot.maxExperience = 100;
-    robot.maxPower = 0;
-    robot.power = 0;
-    robot.heatLimit = 0;
-    robot.currentHeat = 0;
-    robot.isClientConnected = false;
-    robot.isControllerConnected = false;
-    robot.allowedAmmo17mm = 0;
-    robot.allowedAmmo42mm = 0;
-    robot.fortressBonusAmmo = 0;
-    robot.shootSpeedLimit = 0.0f;
-    robot.tabShootSpeedLimit = 0;
-    robot.lastUpdateTime = QDateTime::currentDateTime();
-    robot.q2HeatThreshold = robot.heatLimit + 100;
-
-    m_robots.append(robot);
-  }
-
-  // 蓝方机器人
-  for (int i = 101; i <= 107; ++i) {
-    if(i ==105){
-      continue;
-    }
-    RobotData robot;
-    robot.robotId = i;
-    robot.team = TeamColor::BLUE;
-
-    switch (i) {
-    case 101:
-      robot.type = RobotType::HERO;
-      robot.maxHP = 200;
-      robot.heroRigMode = 0;
-      break;
-    case 102:
-      robot.type = RobotType::ENGINEER;
-      robot.maxHP = 250;
-      break;
-    case 103:
-      robot.type = RobotType::INFANTRY_3;
-      robot.maxHP = 200;
-      robot.infantry17mmMode = 0;
-      break;
-    case 104:
-      robot.type = RobotType::INFANTRY_4;
-      robot.maxHP = 200;
-      robot.infantry17mmMode = 0;
-      break;
-    case 105:
-      robot.type = RobotType::INFANTRY_5;
-      robot.maxHP = 200;
-      robot.infantry17mmMode = 0;
-      break;
-    case 106:
-      robot.type = RobotType::AERIAL;
-      robot.maxHP = 250;
-      break;
-    case 107:
-      robot.type = RobotType::SENTRY;
-      robot.maxHP = 600;
-      break;
-    }
-
-    // 未收到真实静态状态前，默认按"未知且离线"处理，避免顶部列表预亮。
-    robot.maxHP = 0;
-    robot.currentHP = 0;
-    robot.status = RobotStatus::OFFLINE;
-    robot.level = 1;
-    robot.experience = 0;
-    robot.maxExperience = 100;
-    robot.maxPower = 0;
-    robot.power = 0;
-    robot.heatLimit = 0;
-    robot.currentHeat = 0;
-    robot.isClientConnected = false;
-    robot.isControllerConnected = false;
-    robot.allowedAmmo17mm = 0;
-    robot.allowedAmmo42mm = 0;
-    robot.fortressBonusAmmo = 0;
-    robot.shootSpeedLimit = 0.0f;
-    robot.tabShootSpeedLimit = 0;
-    robot.lastUpdateTime = QDateTime::currentDateTime();
-    robot.q2HeatThreshold = robot.heatLimit + 100;
-
-    m_robots.append(robot);
   }
 }
 
-/**
- * @brief 根据机器人ID获取其机器人类型
- * @param robotId 机器人ID (1-7: 红方, 101-107: 蓝方)
- * @return RobotType 对应的机器人类型
- */
-RobotType GameData::getRobotTypeById(quint8 robotId) {
-  // 按照 RoboMaster 规则：蓝方 ID = 红方 ID + 100
-  // 取模 100 可以统一红蓝两方的基础 ID (1-7/9)
-  int baseId = robotId % 100;
-  switch(baseId){
-    case 1:
-      return RobotType::HERO;
-    case 2:
-      return RobotType::ENGINEER;
-    case 3:
-      return RobotType::INFANTRY_3;
-    case 4:
-      return RobotType::INFANTRY_4;
-    case 6:
-      return RobotType::AERIAL;
-    case 7:
-      return RobotType::SENTRY;
-  }
-  return RobotType::INFANTRY_3;
+std::optional<RobotType> GameData::getRobotTypeById(qint64 robotId) {
+  return RM::resolveRobotIdentity(robotId).role;
 }
 
 /**
@@ -785,13 +623,27 @@ RobotType GameData::getRobotTypeById(quint8 robotId) {
  * @param robotId 机器人ID
  * @return const RobotData* 机器人数据指针，如果未找到则返回 nullptr
  */
-const RobotData *GameData::getRobotById(quint8 robotId) const {
+const RobotData *GameData::getRobotById(qint64 robotId) const {
   for (const auto &robot : m_robots) {
     if (robot.robotId == robotId) {
       return &robot;
     }
   }
   return nullptr;
+}
+
+void GameData::setCurrentRobotId(qint64 robotId) {
+  const auto identity = RM::resolveRobotIdentity(robotId);
+  const quint8 next = identity.kind == RM::IdentityKind::Robot && identity.team
+                          ? static_cast<quint8>(robotId) : 0;
+  const auto previous = RM::resolveRobotIdentity(m_currentRobotId);
+  if (m_currentRobotId == next) return;
+  m_currentRobotId = next;
+  emit myRobotUpdated();
+  if (previous.team != RM::resolveRobotIdentity(next).team) {
+    emit currentTeamEconomyChanged();
+    emit runeStatusDataChanged();
+  }
 }
 
 GameData::~GameData() {
@@ -814,12 +666,9 @@ void GameData::updateStandardStatus(RobotData *robot, const robomaster::RobotSta
     // 保存旧状态用于比较(击杀逻辑)
     bool wasAlive = (robot->status != RobotStatus::DESTROYED) && (robot->currentHP > 0);
     quint16 prevHP = robot->currentHP;
-    // 更新机器人id
-    robot->robotId = data.id();
     robot->isClientConnected = true;
     robot->isControllerConnected = true;
 
-    robot->type = static_cast<RobotType>(data.type());
     robot->shootSpeedLimit = robotShootSpeedLimit(robot->type);
     robot->tabShootSpeedLimit = robotTabShootSpeedLimit(robot->type);
     robot->level = data.level();
@@ -874,7 +723,7 @@ void GameData::updateStandardStatus(RobotData *robot, const robomaster::RobotSta
 
 //封装了射速上限计算和超速判定逻辑
 void GameData::checkSpeedLimit(RobotData *robot, bool isPenaltyTriggered) {
-    if (!robot) return;
+    if (!robot || robot->type == RobotType::HEAVY) return;
 
     // --- 射速上限计算 ---
     // 计算当前模式下的射速上限
@@ -964,7 +813,7 @@ void GameData::checkSpeedLimit(RobotData *robot, bool isPenaltyTriggered) {
 }
 
 void GameData::checkHeatLimit(RobotData *robot, bool isPenaltyConfirmed) {
-    if (!robot) return;
+    if (!robot || robot->type == RobotType::HEAVY) return;
 
     // 基础参数校验
     if (robot->heatLimit == 0) return; // 尚未获取到上限，不进行判断
@@ -1337,8 +1186,8 @@ QVariantMap GameData::runeStatusData() const {
   result["averageRings"] = displayAverageRings;
   result["type"] = m_runeData.type;
   result["isActivatable"] = m_runeData.isActivatable;
-  result["isRedTeam"] = robot ? (robot->team == TeamColor::RED)
-                              : (m_currentRobotId < 100);
+  result["isRedTeam"] = robot ? QVariant(robot->team == TeamColor::RED)
+                              : QVariant();
   result["totalRings"] =
       qRound(static_cast<double>(displayAverageRings) *
              static_cast<double>(m_runeData.activatedArms));//总环数
@@ -1512,17 +1361,6 @@ void GameData::updateRosRadarPositions(const RosRadarSnapshot &snapshot) {
 QVariantList GameData::getRedRobotsDataQml() const {
   QVariantList list;
 
-  auto typeName = [](RobotType t) -> QString {
-    switch (t) {
-    case RobotType::HERO: return "英雄";
-    case RobotType::ENGINEER: return "工程";
-    case RobotType::INFANTRY_3:
-    case RobotType::INFANTRY_4: return "步兵";
-    case RobotType::AERIAL: return "空中";
-    case RobotType::SENTRY: return "哨兵";
-    default: return "机器人";
-    }
-  };
   for (const auto &robot : m_robots) {
     if (robot.team != TeamColor::RED) continue;
     const bool isConnected = robotConnectedForTab(robot);
@@ -1537,7 +1375,7 @@ QVariantList GameData::getRedRobotsDataQml() const {
         isConnected ? std::max(1, static_cast<int>(robot.level)) : 0;
     QVariantMap m;
     m["number"] = static_cast<int>(robot.robotId);                  // 红方号码（1-7）
-    m["name"] = typeName(robot.type);                               // 中文类型名
+    m["name"] = getRobotName(robot.robotId);                               // 中文类型名
     m["icon"] = robotTabAvatarSource(robot);                        // 红方头像
     m["currentHP"] = isConnected
                          ? static_cast<int>(useGlobalHp
@@ -1568,17 +1406,6 @@ QVariantList GameData::getRedRobotsDataQml() const {
 QVariantList GameData::getBlueRobotsDataQml() const {
   QVariantList list;
 
-  auto typeName = [](RobotType t) -> QString {
-    switch (t) {
-    case RobotType::HERO: return "英雄";
-    case RobotType::ENGINEER: return "工程";
-    case RobotType::INFANTRY_3:
-    case RobotType::INFANTRY_4:return "步兵";
-    case RobotType::AERIAL: return "空中";
-    case RobotType::SENTRY: return "哨兵";
-    default: return "机器人";
-    }
-  };
   for (const auto &robot : m_robots) {
     if (robot.team != TeamColor::BLUE) continue;
     const bool isConnected = robotConnectedForTab(robot);
@@ -1593,7 +1420,7 @@ QVariantList GameData::getBlueRobotsDataQml() const {
         isConnected ? std::max(1, static_cast<int>(robot.level)) : 0;
     QVariantMap m;
     m["number"] = static_cast<int>(robot.robotId);
-    m["name"] = typeName(robot.type);
+    m["name"] = getRobotName(robot.robotId);
     m["icon"] = robotTabAvatarSource(robot);                         // 蓝方头像
     m["currentHP"] = isConnected
                          ? static_cast<int>(useGlobalHp
@@ -1721,12 +1548,21 @@ void GameData::resetInjuryStatsOnRespawn() {
  * @param data Protobuf 格式的机器人状态消息
  */
 void GameData::updateRobotData(const robomaster::RobotStatus &data) {
-    quint8 id = data.id();
+    updateRobotDataImpl(data, false);
+}
 
-    // 1. 确定目标机器人
-    // 如果是特殊 ID (0/200/201)，则目标明确为"本机"
-    bool isSelfUpdate = (id == 0 || id == 200 || id == 201);
-    quint8 targetId = isSelfUpdate ? m_currentRobotId : id;
+void GameData::updateLegacyRobotData(const robomaster::RobotStatus &data) {
+    updateRobotDataImpl(data, true);
+}
+
+void GameData::updateRobotDataImpl(const robomaster::RobotStatus &data, bool legacyTag) {
+    // 0、200、201 是旧 UDP 转换器的内部数据标签，不是机器人身份。
+    const quint32 id = data.id();
+    const bool isSelfUpdate = legacyTag && (id == 0 || id == 200 || id == 201);
+    const auto identity = RM::resolveRobotIdentity(isSelfUpdate ? m_currentRobotId : id);
+    if (identity.kind != RM::IdentityKind::Robot || !identity.role || !identity.team)
+        return;
+    const quint8 targetId = static_cast<quint8>(identity.rawId);
 
     RobotData *robot = findRobotById(targetId);
     if (!robot) return;
@@ -1775,27 +1611,6 @@ void GameData::updateRobotData(const robomaster::RobotStatus &data) {
              robot->muzzleVelocity = data.muzzle_velocity();
              checkSpeedLimit(robot, false); // 更新射速上限，但不触发判罚逻辑
         }
-        //根据id修改对应的type，防止传入的type错误
-        switch(id%100){
-          case 1:
-              robot->type = RobotType::HERO;
-              break;
-          case 2:
-              robot->type = RobotType::ENGINEER;
-              break;
-          case 3:
-              robot->type = RobotType::INFANTRY_3;
-              break;
-          case 4:
-              robot->type = RobotType::INFANTRY_4;
-              break;
-          case 6:
-              robot->type = RobotType::AERIAL;
-              break;
-          case 7:
-              robot->type = RobotType::SENTRY;
-              break;
-          }
         robot->shootSpeedLimit = robotShootSpeedLimit(robot->type);
         robot->tabShootSpeedLimit = robotTabShootSpeedLimit(robot->type);
 
@@ -1866,9 +1681,8 @@ void GameData::updateBaseHP(TeamColor team, quint16 hp) {
 }
 
 void GameData::trackAllyBaseHealthDropAlert(TeamColor team, quint16 hp, qint64 nowMs) {
-  const bool allyIsRed = m_currentRobotId < 100;
-  const TeamColor allyTeam = allyIsRed ? TeamColor::RED : TeamColor::BLUE;
-  if (team != allyTeam) {
+  const RobotData *current = getCurrentRobot();
+  if (!current || team != current->team) {
     return;
   }
 
@@ -1920,9 +1734,8 @@ void GameData::updateBaseStatus(TeamColor team, quint8 status) {
     base.lastUpdateTime = QDateTime::currentDateTime();
 
     if (prevStatus != status) {
-        const TeamColor allyTeam =
-            m_currentRobotId >= 100 ? TeamColor::BLUE : TeamColor::RED;
-        if (wasObserved && status == 2 && team == allyTeam &&
+        const RobotData *current = getCurrentRobot();
+        if (current && wasObserved && status == 2 && team == current->team &&
             m_gameState.gameProgress == GameStage::BATTLE) {
             emit allyBaseArmorOpenedTriggered();
         }
@@ -1950,9 +1763,8 @@ void GameData::updateOutpostHP(TeamColor team, quint16 hp) {
 }
 
 void GameData::trackAllyOutpostHealthDropAlert(TeamColor team, quint16 hp, qint64 nowMs) {
-  const bool allyIsRed = m_currentRobotId < 100;
-  const TeamColor allyTeam = allyIsRed ? TeamColor::RED : TeamColor::BLUE;
-  if (team != allyTeam) {
+  const RobotData *current = getCurrentRobot();
+  if (!current || team != current->team) {
     return;
   }
 
@@ -2103,35 +1915,24 @@ void GameData::updateGlobalUnitStatusInternal(const robomaster::GlobalUnitStatus
 }
 
 void GameData::updateRobotStaticStatus(const robomaster::RobotStaticStatus &data) {
-  //MQTT协议绑定
-  const RobotType parsedType =
-      robotTypeFromProtocolId(data.robot_id(), data.robot_type());
-  if (parsedType == RobotType::DART) {
-    const bool newDartOnline = (data.connection_state() == 1);
-    const bool changed = (!m_hasDartRobotConnectionState) ||
-                         (m_dartRobotOnline != newDartOnline);
-    m_hasDartRobotConnectionState = true;
-    m_dartRobotOnline = newDartOnline;
-    qInfo() << "[DartDebug] GameData: RobotStaticStatus(DART)"
-            << "robotId=" << data.robot_id()
-            << "connection_state=" << data.connection_state()
-            << "online=" << m_dartRobotOnline;
-    if (changed) {
-      emit siloStatusChanged();
-    }
-  }
-
-  // 1. 更新机器人静态数据
-  int robotId = data.robot_id();
-  RobotData *robot = findRobotById(robotId);
-  if (!robot) {
-    qWarning() << "[RobotStaticStatus] Unknown robot id=" << robotId
-               << "type=" << static_cast<int>(parsedType)
-               << "connection_state=" << data.connection_state()
-               << "field_state=" << data.field_state()
-               << "alive_state=" << data.alive_state();
+  const auto identity = RM::resolveRobotIdentity(data.robot_id());
+  if (identity.kind != RM::IdentityKind::Robot || !identity.role || !identity.team) {
+    qWarning() << "[RobotStaticStatus] Invalid robot id=" << data.robot_id()
+               << "raw robot_type=" << data.robot_type();
     return;
   }
+  const int robotId = static_cast<int>(identity.rawId);
+  qDebug() << "[RobotStaticStatus] robotId=" << robotId
+           << "raw robot_type=" << data.robot_type();
+  if (*identity.role == RobotType::DART) {
+    const bool newDartOnline = data.connection_state() == 1;
+    const bool changed = !m_hasDartRobotConnectionState || m_dartRobotOnline != newDartOnline;
+    m_hasDartRobotConnectionState = true;
+    m_dartRobotOnline = newDartOnline;
+    if (changed) emit siloStatusChanged();
+  }
+  RobotData *robot = findRobotById(robotId);
+  if (!robot) return;
 
   //当等级发生变化时，发出系统消息
   if (robot->level != data.level() && data.level()!=0) {
@@ -2142,9 +1943,6 @@ void GameData::updateRobotStaticStatus(const robomaster::RobotStaticStatus &data
   }
 
   if (robot) {
-    robot->robotId = robotId;
-    robot->team = (robotId >= 100) ? TeamColor::BLUE : TeamColor::RED;
-    robot->type = parsedType;
     robot->level = static_cast<quint8>(data.level());
     robot->maxHP = static_cast<quint16>(data.max_health());
     robot->currentRoundMaxHP = qMax(robot->currentRoundMaxHP, robot->maxHP);
@@ -2164,8 +1962,10 @@ void GameData::updateRobotStaticStatus(const robomaster::RobotStaticStatus &data
     robot->tabStaticConnected = (data.connection_state() == 1);
     robot->isClientConnected = engineConnected;
     robot->isControllerConnected = engineConnected;
-    robot->chassisEnabled = (robot->chassisPerformanceSelection != 0);
-    robot->shooterLocked = (robot->shooterPerformanceSelection == 0);
+    if (robot->type != RobotType::HEAVY) {
+      robot->chassisEnabled = (robot->chassisPerformanceSelection != 0);
+      robot->shooterLocked = (robot->shooterPerformanceSelection == 0);
+    }
 
     // RobotStaticStatus 只要下发就说明机器人在场内已注册。
     // connection_state=0 只表示硬件连接暂时断开，不应直接标记为 OFFLINE。
@@ -2238,9 +2038,7 @@ void GameData::updateRobotDynamicStatus(const robomaster::RobotDynamicStatus &da
       static_cast<quint16>(qMin<quint64>(currentExperience, 65535ull));
   robot->maxExperience = static_cast<quint16>(
       qMin<quint64>(currentExperience + experienceForUpgrade, 65535ull));
-  if (robotId == 1 || robotId == 101) {
-    robot->allowedAmmo42mm = static_cast<quint16>(data.remaining_ammo());
-  } else {
+  if (robot->type != RobotType::HEAVY) {
     robot->allowedAmmo17mm = static_cast<quint16>(data.remaining_ammo());
   }
   robot->isOutOfCombat = data.is_out_of_combat();
@@ -2272,7 +2070,7 @@ void GameData::updateRobotDynamicStatus(const robomaster::RobotDynamicStatus &da
 }
 
 bool GameData::isRobotConnected(int robotId) const {
-  const RobotData *r = getRobotById(static_cast<quint8>(robotId));
+  const RobotData *r = getRobotById(robotId);
   if (!r) return false;
   return r->isClientConnected || r->isControllerConnected;
 }
@@ -2280,9 +2078,8 @@ bool GameData::isRobotConnected(int robotId) const {
 bool GameData::isAerialConnected() const {
   // 找到与当前选中机器人同队的 AERIAL 类型机器人并判断其连接状态
   const RobotData *current = getCurrentRobot();
-  TeamColor team = TeamColor::RED;
-  if (current)
-    team = current->team;
+  if (!current) return false;
+  const TeamColor team = current->team;
 
   for (const RobotData &r : m_robots) {
     if (r.team == team && r.type == RobotType::AERIAL) {
@@ -2332,45 +2129,15 @@ void GameData::eventInfo(const robomaster::Event &data) {
   const QString param = QString::fromStdString(data.param()).trimmed();
   switch (eventId) {
   case 1: {
-      const QString p = param;
-      QStringList parts = p.split(",");
-      if (parts.size() == 2) {
-          bool ok1 = false;
-          bool ok2 = false;
-          quint8 victimId = parts[0].toUInt(&ok1);
-          quint8 killerId = parts[1].toUInt(&ok2);
-          if (ok1 && ok2) {
-              recordKill(killerId, victimId);
-
-              const TeamColor killerTeam =
-                  killerId >= 100 ? TeamColor::BLUE : TeamColor::RED;
-              const QString killerTeamText =
-                  killerTeam == TeamColor::RED ? QStringLiteral("红方")
-                                               : QStringLiteral("蓝方");
-              const TeamColor victimTeam =
-                  victimId >= 100 ? TeamColor::BLUE : TeamColor::RED;
-              const QString victimTeamText =
-                  victimTeam == TeamColor::RED ? QStringLiteral("红方")
-                                               : QStringLiteral("蓝方");
-              const QString messageColor =
-                  victimTeam == currentTeam ? QStringLiteral("#d52424")
-                                            : QStringLiteral("#60D8B7");
-
-              if(killerId == victimId || killerId % 100 == 10 ){
-                addSystemMessage(
-                  QStringLiteral("%1%2机器人阵亡")
-                      .arg(killerTeamText, getRobotName(killerId)),
-                  messageColor);
-              }
-              else{
-                addSystemMessage(
-                    QStringLiteral("%1%2机器人击毁了%3%4机器人")
-                        .arg(killerTeamText, getRobotName(killerId),
-                            victimTeamText, getRobotName(victimId)),
-                    messageColor);
-                }
-          }
-      }
+      const auto event = parseKillEvent(param);
+      if (!event) break;
+      recordKill(static_cast<quint8>(event->killer.rawId),
+                 static_cast<quint8>(event->victim.rawId));
+      const QString color = currentRobot
+          ? (*event->victim.team == currentRobot->team ? QStringLiteral("#d52424")
+                                                       : QStringLiteral("#60D8B7"))
+          : QStringLiteral("#808080");
+      addSystemMessage(killEventMessage(*event), color);
       break;
   }
   case 2: {
@@ -2746,55 +2513,22 @@ QVariantList GameData::runeGroupDeltas() const {
 }
 
 void GameData::updateGlobalUnitStatus(const robomaster::GlobalUnitStatus &data) {
-  const bool isBluePerspective = m_currentRobotId >= 100;
-  const TeamColor allyTeam =
-      isBluePerspective ? TeamColor::BLUE : TeamColor::RED;
-  const TeamColor enemyTeam =
-      isBluePerspective ? TeamColor::RED : TeamColor::BLUE;
-  const QList<int> compactAllyRoster =
-      isBluePerspective ? QList<int>{101, 102, 103} : QList<int>{1, 2, 3};
-  const QList<int> compactEnemyRoster =
-      isBluePerspective ? QList<int>{1, 2, 3} : QList<int>{101, 102, 103};
-  const QList<int> midAllyRoster =
-      isBluePerspective ? QList<int>{101, 102, 103, 104, 107}
-                        : QList<int>{1, 2, 3, 4, 7};
-  const QList<int> midEnemyRoster =
-      isBluePerspective ? QList<int>{1, 2, 3, 4, 7}
-                        : QList<int>{101, 102, 103, 104, 107};
-  const QList<int> extendedAllyRoster = isBluePerspective
-                                            ? QList<int>{101, 102, 103, 104, 106, 107}
-                                            : QList<int>{1, 2, 3, 4, 6, 7};
-  const QList<int> extendedEnemyRoster = isBluePerspective
-                                             ? QList<int>{1, 2, 3, 4, 6, 7}
-                                             : QList<int>{101, 102, 103, 104, 106, 107};
-
-  const bool useExtendedRoster =
-      data.robot_health_size() == extendedAllyRoster.size() ||
-      data.robot_health_size() >=
-          (extendedAllyRoster.size() + extendedEnemyRoster.size());
-  const bool useMidRoster =
-      !useExtendedRoster &&
-      (data.robot_health_size() == midAllyRoster.size() ||
-       data.robot_health_size() >=
-           (midAllyRoster.size() + midEnemyRoster.size()));
-  const QList<int> allyRoster = useExtendedRoster
-                                    ? extendedAllyRoster
-                                    : (useMidRoster ? midAllyRoster
-                                                    : compactAllyRoster);
-  const QList<int> enemyRoster = useExtendedRoster
-                                     ? extendedEnemyRoster
-                                     : (useMidRoster ? midEnemyRoster
-                                                     : compactEnemyRoster);
-  const bool hasEnemySnapshot =
-      data.robot_health_size() > allyRoster.size() ||
+  const auto self = RM::resolveRobotIdentity(m_currentRobotId);
+  if (self.kind != RM::IdentityKind::Robot || !self.team) {
+    qWarning() << "[GlobalUnitStatus] missing valid current robot identity";
+    return;
+  }
+  const bool isBluePerspective = *self.team == TeamColor::BLUE;
+  const TeamColor allyTeam = *self.team;
+  const TeamColor enemyTeam = isBluePerspective ? TeamColor::RED : TeamColor::BLUE;
+  const QList<int> allyRoster = isBluePerspective ? QList<int>{101, 103, 104, 107}
+                                                   : QList<int>{1, 3, 4, 7};
+  const QList<int> enemyRoster = isBluePerspective ? QList<int>{1, 3, 4, 7}
+                                                    : QList<int>{101, 103, 104, 107};
+  const bool hasEnemySnapshot = data.robot_health_size() > 4 ||
       data.enemy_base_health() > 0 || data.enemy_outpost_health() > 0 ||
       data.enemy_base_status() > 0 || data.enemy_outpost_status() > 0 ||
       data.total_damage_enemy() > 0;
-
-  for (auto &robot : m_robots) {
-    robot.hasTabGlobalSnapshot = false;
-    robot.tabGlobalCurrentHP = 0;
-  }
 
   updateBaseHP(allyTeam, static_cast<quint16>(data.base_health()));
   updateBaseStatus(allyTeam, static_cast<quint8>(data.base_status()));
@@ -2835,27 +2569,15 @@ void GameData::updateGlobalUnitStatus(const robomaster::GlobalUnitStatus &data) 
     const quint16 globalHp =
         static_cast<quint16>(data.robot_health(topicIndex));
     const quint16 prevHP = robot->currentHP;
-    const bool hasStaticConnection =
-        robot->isClientConnected || robot->isControllerConnected;
     robot->tabGlobalCurrentHP = globalHp;
     robot->currentRoundMaxHP = qMax(robot->currentRoundMaxHP, globalHp);
-    if (globalHp > 0 || !hasStaticConnection) {
-      robot->currentHP = globalHp;
-    }
+    robot->currentHP = globalHp;
     robot->lastUpdateTime = QDateTime::currentDateTime();
     robot->hasTabGlobalSnapshot = true;
 
-    if (topicIndex < data.robot_bullets_size()) {
-      const int bullets = std::max(0, data.robot_bullets(topicIndex));
-      if (robotId == 1 || robotId == 101) {
-        robot->allowedAmmo42mm = static_cast<quint16>(bullets);
-      } else {
-        robot->allowedAmmo17mm = static_cast<quint16>(bullets);
-      }
-    }
+    // robot_bullets 的索引规则尚未确认，不从血量顺序推断。
 
-    if (globalHp == 0 && !hasStaticConnection &&
-        robot->status != RobotStatus::OFFLINE) {
+    if (globalHp == 0 && robot->status != RobotStatus::OFFLINE) {
       robot->status = RobotStatus::DESTROYED;
     } else if (globalHp > 0 && robot->status == RobotStatus::DESTROYED) {
       robot->status = RobotStatus::NORMAL;
@@ -2883,18 +2605,18 @@ void GameData::updateGlobalUnitStatus(const robomaster::GlobalUnitStatus &data) 
   }
 
   if (isBluePerspective) {
-    m_blueRobotTotalHP = allyTotalHp;
+    if (data.robot_health_size() >= 4) m_blueRobotTotalHP = allyTotalHp;
     if (hasEnemySnapshot) {
-      m_redRobotTotalHP = enemyTotalHp;
+      if (data.robot_health_size() >= 8) m_redRobotTotalHP = enemyTotalHp;
     }
     m_blueTeamStats.totalDamageDealt = data.total_damage_ally();
     if (hasEnemySnapshot || data.total_damage_enemy() > 0) {
       m_redTeamStats.totalDamageDealt = data.total_damage_enemy();
     }
   } else {
-    m_redRobotTotalHP = allyTotalHp;
+    if (data.robot_health_size() >= 4) m_redRobotTotalHP = allyTotalHp;
     if (hasEnemySnapshot) {
-      m_blueRobotTotalHP = enemyTotalHp;
+      if (data.robot_health_size() >= 8) m_blueRobotTotalHP = enemyTotalHp;
     }
     m_redTeamStats.totalDamageDealt = data.total_damage_ally();
     if (hasEnemySnapshot || data.total_damage_enemy() > 0) {
@@ -4138,10 +3860,8 @@ void GameData::updateRadarInfo(const robomaster::RadarInfoToClient &data) {
 
   //获取己方阵营和敌方阵营
   const RobotData *currentRobot = getCurrentRobot();
-  const TeamColor myTeam =
-      currentRobot ? currentRobot->team
-                   : ((m_currentRobotId >= 100) ? TeamColor::BLUE
-                                               : TeamColor::RED);
+  if (!currentRobot) return;
+  const TeamColor myTeam = currentRobot->team;
   const TeamColor enemyTeam =
       (myTeam == TeamColor::RED) ? TeamColor::BLUE : TeamColor::RED;
   const QDateTime now = QDateTime::currentDateTime();
@@ -4220,7 +3940,7 @@ void GameData::updateRobotModuleStatus(const robomaster::RobotModuleStatus &data
 
   //获取当前机器人类型（是否是英雄）
   const RobotData *currentRobot = getCurrentRobot();
-  const bool isHero = currentRobot ? (currentRobot->robotId % 100 == 1) : false;
+  const bool isHero = currentRobot && currentRobot->type == RobotType::HERO;
 
   // 2. 同时维护旧的列表结构，兼容已有的 Repeater 显示
   m_moduleStatus.clear();
@@ -4257,7 +3977,7 @@ void GameData::updateRobotModuleStatus(const robomaster::RobotModuleStatus &data
   if (isHero) {
     addModule("42mm测速", data.big_shooter());
   }
-  else{
+  else if (currentRobot && currentRobot->type != RobotType::HEAVY) {
     addModule("17mm测速", data.small_shooter());
   }
   // 图传（来自 video_transmission）
@@ -4301,29 +4021,7 @@ void GameData::recordDamageEvent(const DamageEventData &data) {
 
 // 辅助函数：获取机器人名称
 static QString getRobotName(int robotId) {
-    int id = (robotId > 100) ? (robotId - 100) : robotId;
-    switch (id) {
-        case 1: return "英雄";
-        case 2: return "工程";
-        case 3: return "步兵3";
-        case 4: return "步兵4";
-        case 5: return "步兵5";
-        case 6: return "空中";
-        case 7: return "哨兵";
-        case 8: return "飞镖";
-        case 9: return "雷达";
-        default: return QString("未知(%1)").arg(id);
-    }
-}
-
-// 辅助函数：获取机器人颜色
-static QString getRobotColor(int robotId) {
-    // 假设 1-100 为红方，101+ 为蓝方
-    if (robotId <= 100) {
-        return "#FF5050"; // 红方颜色
-    } else {
-        return "#50A0FF"; // 蓝方颜色
-    }
+    return RM::resolveRobotIdentity(robotId).displayName;
 }
 
 void GameData::recordKill(quint8 killerId, quint8 victimId) {
@@ -4545,7 +4243,7 @@ void GameData::onUpdateTimer() {
 }
 
 // 私有辅助方法实现
-RobotData *GameData::findRobotById(quint8 robotId) {
+RobotData *GameData::findRobotById(qint64 robotId) {
   for (auto &robot : m_robots) {
     if (robot.robotId == robotId) {
       return &robot;
@@ -4689,15 +4387,11 @@ void GameData::setSpeedOverLimit(quint8 id, bool overLimit, quint16 lockSeconds)
 }
 
 void GameData::setRobotType(quint8 id, int type) {
-  RobotData *robot = findRobotById(id);
-  if (robot) {
-    robot->type = static_cast<RobotType>(type);
-    robot->shootSpeedLimit = robotShootSpeedLimit(robot->type);
-    robot->tabShootSpeedLimit = robotTabShootSpeedLimit(robot->type);
-    emit robotDataUpdated(id);
-    if (id == m_currentRobotId) {
-         emit myRobotUpdated();
-    }
+  Q_UNUSED(type)
+  // 身份由 ID 唯一决定，调试接口不得覆盖身份。
+  if (RobotData *robot = findRobotById(id)) {
+    const auto identity = RM::resolveRobotIdentity(id);
+    if (identity.role) robot->type = *identity.role;
   }
 }
 
@@ -4905,26 +4599,14 @@ void GameData::updateRefereeWarning(const robomaster::RefereeWarningData &data) 
 
 // ==================== 自定义 UI 数据支持 (CustomByteBlock) ====================
 
-RobotData& GameData::getRobotDataRef(quint8 robotId) {
-    for (auto& robot : m_robots) {
-        if (robot.robotId == robotId) {
-            return robot;
-        }
-    }
-    // 如果找不到，添加到列表中
-    RobotData newRobot;
-    newRobot.robotId = robotId;
-    m_robots.append(newRobot);
-    return m_robots.last();
+RobotData *GameData::getRobotDataRef(qint64 robotId) {
+    return findRobotById(robotId);
 }
 
 QVariantMap GameData::getMyRobotCustomData() const {
     QVariantMap data;
 
     quint8 myId = m_currentRobotId;
-    if (myId == 0 && !m_robots.isEmpty()) {
-        myId = m_robots.first().robotId;
-    }
 
     const RobotData* robot = getRobotById(myId);
     if (!robot) {

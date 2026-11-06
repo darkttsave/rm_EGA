@@ -11,6 +11,28 @@ class TestProtocol : public QObject {
   Q_OBJECT
 
 private slots:
+  void test2027RobotHealthPacket() {
+    game_robot_HP_t health{};
+    health.ally_1_robot_HP = 101;
+    health.reserved = 999;
+    health.ally_3_robot_HP = 103;
+    health.ally_4_robot_HP = 0;
+    health.damage_difference = 888;
+    health.ally_7_robot_HP = 107;
+    SimpleFrameHeader header{};
+    header.cmdId = static_cast<quint16>(CmdID::GAME_ROBOT_HP);
+    header.dataLength = sizeof(health);
+    QByteArray packet(reinterpret_cast<const char *>(&header), sizeof(header));
+    packet.append(reinterpret_cast<const char *>(&health), sizeof(health));
+    robomaster::RoboMasterMessage msg;
+    QVERIFY(Protocol::parsePacket(packet, msg));
+    const auto &hp = msg.global_unit_status().robot_health();
+    QCOMPARE(hp.size(), 4);
+    QCOMPARE(hp.Get(0), 101);
+    QCOMPARE(hp.Get(1), 103);
+    QCOMPARE(hp.Get(2), 0);
+    QCOMPARE(hp.Get(3), 107);
+  }
   /**
    * @brief 测试序列化和反序列化
    */

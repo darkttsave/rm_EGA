@@ -38,6 +38,32 @@ template <typename T> QByteArray bytes(const T &message) {
 class TestOfficialMessageHandler : public QObject {
   Q_OBJECT
 private slots:
+  void identityAndGlobalHealthThroughOfficialTopics() {
+    GameData data;
+    data.setMyRobotId(101);
+    robomaster::RobotStaticStatus status;
+    status.set_robot_id(101);
+    status.set_robot_type(8);
+    status.set_connection_state(1);
+    QCOMPARE(OfficialMessageHandler::handle("RobotStaticStatus", bytes(status), data, {}), OfficialMessageHandler::Result::Parsed);
+    QCOMPARE(data.getRobotById(101)->type, RobotType::HEAVY);
+    robomaster::GlobalUnitStatus units;
+    for (int i = 0; i < 8; ++i) units.add_robot_health(101 + i);
+    QCOMPARE(OfficialMessageHandler::handle("GlobalUnitStatus", bytes(units), data, {}), OfficialMessageHandler::Result::Parsed);
+    const QList<int> ids{101, 103, 104, 107, 1, 3, 4, 7};
+    for (int i = 0; i < ids.size(); ++i)
+      QCOMPARE(data.getRobotById(ids[i])->currentHP, 101 + i);
+    QSignalSpy kills(&data, &GameData::killEventOccurred);
+    robomaster::Event event;
+    event.set_event_id(1);
+    event.set_param("1,101");
+    QCOMPARE(OfficialMessageHandler::handle("Event", bytes(event), data, {}), OfficialMessageHandler::Result::Parsed);
+    QCOMPARE(kills.count(), 1);
+    event.set_event_id(16);
+    event.clear_param();
+    QCOMPARE(OfficialMessageHandler::handle("Event", bytes(event), data, {}), OfficialMessageHandler::Result::Parsed);
+    QVERIFY(data.event16Received());
+  }
   void supportedMessagesAndLogging() {
     GameData data;
     QSignalSpy fortress(&data, &GameData::allyFortressOccupationAlertTriggered);
@@ -285,6 +311,32 @@ private slots:
     QVERIFY(display->property("text").toString().contains(QStringLiteral("尚未独立确认")));
     QTest::qWait(100);
     QCOMPARE(observed.count(), 1); QCOMPARE(received.count(), 3);
+    data.setMyRobotId(101);
+    robomaster::RobotStaticStatus invalidIdentity;
+    invalidIdentity.set_robot_id(257);
+    invalidIdentity.set_robot_type(8);
+    invalidIdentity.set_connection_state(1);
+    QSignalSpy silo(&data, &GameData::siloStatusChanged);
+    QVERIFY(publisher.publish(QStringLiteral("RobotStaticStatus"), bytes(invalidIdentity), 1));
+    QTRY_COMPARE_WITH_TIMEOUT(received.count(), 4, 5000);
+    QCOMPARE(silo.count(), 0);
+    QCOMPARE(data.getRobotById(1)->isClientConnected, false);
+    robomaster::GlobalUnitStatus health;
+    for (int i = 0; i < 8; ++i) health.add_robot_health(101 + i);
+    QVERIFY(publisher.publish(QStringLiteral("GlobalUnitStatus"), bytes(health), 1));
+    QTRY_COMPARE_WITH_TIMEOUT(data.getRobotById(7)->currentHP, 108, 5000);
+    const QList<int> ids{101, 103, 104, 107, 1, 3, 4, 7};
+    for (int i = 0; i < ids.size(); ++i)
+      QCOMPARE(data.getRobotById(ids[i])->currentHP, 101 + i);
+    QSignalSpy kills(&data, &GameData::killEventOccurred);
+    QSignalSpy popups(&data, &GameData::officialEventPopupRequested);
+    robomaster::Event kill;
+    kill.set_event_id(1);
+    kill.set_param("1,101");
+    QVERIFY(publisher.publish(QStringLiteral("Event"), bytes(kill), 1));
+    QTRY_COMPARE_WITH_TIMEOUT(kills.count(), 1, 5000);
+    QTRY_COMPARE_WITH_TIMEOUT(popups.count(), 1, 5000);
+    QVERIFY(popups.first().at(1).toString().contains(QStringLiteral("蓝方重装机器人击毁了红方重装机器人")));
     network.stopMqtt();
     publisher.disconnect();
     broker.terminate();

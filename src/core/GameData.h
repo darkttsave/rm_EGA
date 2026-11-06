@@ -11,6 +11,7 @@
 
 #ifndef GAMEDATA_H
 #define GAMEDATA_H
+#include <optional>
 
 #include "../network/Protocol.h"
 #include "../network/RosRadarBridgeProtocol.h"
@@ -724,25 +725,15 @@ public:
    * @param robotId 机器人ID (1-7, 101-107)
    * @return RobotType 对应的机器人类型
    */
-  static RobotType getRobotTypeById(quint8 robotId);
-  const RobotData *getRobotById(quint8 robotId) const;
+  static std::optional<RobotType> getRobotTypeById(qint64 robotId);
+  const RobotData *getRobotById(qint64 robotId) const;
   const RobotData *getCurrentRobot() const;
-  void setCurrentRobotId(quint8 robotId) {
-    if (m_currentRobotId == robotId)
-      return;
-    const bool teamChanged = (m_currentRobotId >= 100) != (robotId >= 100);
-    m_currentRobotId = robotId;
-    emit myRobotUpdated();
-    if (teamChanged) {
-      emit currentTeamEconomyChanged();
-      emit runeStatusDataChanged();
-    }
-  }
+  void setCurrentRobotId(qint64 robotId);
   quint8 getCurrentRobotId() const { return m_currentRobotId; }
 
   // ===== 自定义 UI 数据访问器 =====
   Q_INVOKABLE QVariantMap getMyRobotCustomData() const;
-  RobotData& getRobotDataRef(quint8 robotId);
+  RobotData *getRobotDataRef(qint64 robotId);
 
   // 基地数据访问器
   const BaseData &getRedBase() const { return m_redBase; }
@@ -787,7 +778,8 @@ public:
   int allyFortressOccupationSec() const { return m_allyFortressOccupationSec; }
   int enemyFortressOccupationSec() const { return m_enemyFortressOccupationSec; }
   int currentTeamEconomy() const {
-    return m_currentRobotId >= 100 ? m_blueEconomy : m_redEconomy;
+    const RobotData *robot = getCurrentRobot();
+    return !robot ? 0 : robot->team == TeamColor::BLUE ? m_blueEconomy : m_redEconomy;
   }
 
   int redBaseHealth() const { return m_redBase.currentHP; }
@@ -806,8 +798,8 @@ public:
   int blueOutpostMaxHealth() const { return m_blueOutpostData.maxHP; }
   int enemyOutpostHealth() const {
     const RobotData *robot = getCurrentRobot();
-    const bool myIsRed =
-        robot ? (robot->team == TeamColor::RED) : (m_currentRobotId < 100);
+    if (!robot) return 0;
+    const bool myIsRed = robot->team == TeamColor::RED;
     return myIsRed ? m_blueOutpostData.currentHP : m_redOutpostData.currentHP;
   }
   bool customUIEnabled() const { return m_customUIEnabled; }
@@ -826,10 +818,12 @@ public:
   }
 
   QString redTeamName() const {
+    if (!getCurrentRobot()) return QString();
     return m_currentRobotId < 100 ? QStringLiteral("复旦大学 星云EGA")
                                   : enemyTeamName();
   }
   QString blueTeamName() const {
+    if (!getCurrentRobot()) return QString();
     return m_currentRobotId < 100 ? enemyTeamName()
                                   : QStringLiteral("复旦大学 星云EGA");
   }
@@ -1074,6 +1068,8 @@ public:
    * @param data Protobuf格式的机器人状态消息
    */
   void updateRobotData(const robomaster::RobotStatus &data);
+  // 仅供已识别 UDP 命令的转换器使用内部标签 0/200/201。
+  void updateLegacyRobotData(const robomaster::RobotStatus &data);
   void updateRobotInjury(const robomaster::RobotInjuryStat &data);
   void updateRobotModuleStatus(const robomaster::RobotModuleStatus &data); // 新增：模块在线状态更新
 
@@ -1217,7 +1213,7 @@ public slots:
   Q_INVOKABLE int getMyRobotId() const;
   QVariantMap getLastRespawnStatus() const { return m_lastRespawnStatus; }
   QVariantMap robotRespawnStatus() const;
-  void setMyRobotId(int id) { setCurrentRobotId(static_cast<quint8>(id)); } // 兼容旧调用
+  void setMyRobotId(int id) { setCurrentRobotId(id); } // 兼容旧调用
 
   // 模拟器测试接口：注入飞镖命中事件（team: 1=红方 2=蓝方, targetId: 1-5）
   Q_INVOKABLE void simulateDartHit(int team, int targetId);
@@ -1553,7 +1549,8 @@ public:
 
 private:
   // 查找方法
-  RobotData *findRobotById(quint8 robotId);
+  RobotData *findRobotById(qint64 robotId);
+  void updateRobotDataImpl(const robomaster::RobotStatus &data, bool legacyTag);
   BuffPointData *findBuffPointById(quint8 pointId);
   ModuleStatusData *findModuleByName(const QString &moduleName);
   QVariantMap normalizeRobotRespawnStatus(const QVariantMap &status) const; // 归一化复活状态增量字段

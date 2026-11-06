@@ -1,4 +1,5 @@
 #include "core/GameData.h"
+#include "core/RobotIdentity.h"
 #include "core/GameConstants.h"
 #include "network/Protocol.h"
 #include "robomaster.pb.h"
@@ -32,6 +33,148 @@ class TestGameData : public QObject {
   Q_OBJECT
 
 private slots:
+  void testOfficialIdentityAndInvalidInputs() {
+    GameData data;
+    for (int offset : {0, 100}) {
+      for (int id : {1, 3, 4, 5, 6, 7, 8, 9}) {
+        const auto identity = RM::resolveRobotIdentity(offset + id);
+        const auto *robot = data.getRobotById(offset + id);
+        QVERIFY(robot);
+        QCOMPARE(robot->robotId, offset + id);
+        QCOMPARE(robot->type, *identity.role);
+        QCOMPARE(robot->team, *identity.team);
+      }
+      QVERIFY(!data.getRobotById(offset + 2));
+    }
+    QVERIFY(!data.getRobotById(257));
+    QVERIFY(!GameData::getRobotTypeById(201));
+    QCOMPARE(*GameData::getRobotTypeById(101), RobotType::HEAVY);
+    QSignalSpy updated(&data, &GameData::robotDataUpdated);
+    QSignalSpy silo(&data, &GameData::siloStatusChanged);
+    robomaster::RobotStaticStatus status;
+    status.set_robot_type(8);
+    status.set_connection_state(1);
+    for (quint32 id : {2u, 102u, 201u, 257u, 4294967295u}) {
+      status.set_robot_id(id);
+      data.updateRobotStaticStatus(status);
+    }
+    QCOMPARE(updated.count(), 0);
+    QCOMPARE(silo.count(), 0);
+    status.set_robot_id(1);
+    data.updateRobotStaticStatus(status);
+    QCOMPARE(data.getRobotById(1)->type, RobotType::HEAVY);
+    QVERIFY(!data.getRobotById(1)->shooterLocked);
+    robomaster::RobotDynamicStatus dynamic;
+    dynamic.set_current_health(100);
+    dynamic.set_remaining_ammo(53);
+    data.updateRobotDynamicStatus(dynamic);
+    QCOMPARE(data.getRobotById(1)->allowedAmmo42mm, 0);
+    QCOMPARE(data.getRobotById(1)->allowedAmmo17mm, 0);
+    QCOMPARE(silo.count(), 0);
+    data.setRobotType(1, int(RobotType::HERO));
+    QCOMPARE(data.getRobotById(1)->type, RobotType::HEAVY);
+    updated.clear();
+    robomaster::RobotStatus ordinary;
+    for (quint32 id : {0u, 2u, 102u, 200u, 201u, 257u, 4294967295u}) {
+      ordinary.set_id(id);
+      ordinary.set_hp(700);
+      data.updateRobotData(ordinary);
+    }
+    QCOMPARE(updated.count(), 0);
+    ordinary.set_id(201);
+    ordinary.set_muzzle_velocity(8.0f);
+    data.updateLegacyRobotData(ordinary);
+    QCOMPARE(updated.count(), 1);
+    QCOMPARE(data.getRobotById(1)->muzzleVelocity, 8.0f);
+  }
+
+  void testOfficialGlobalHealth_data() {
+    QTest::addColumn<int>("currentId");
+    QTest::newRow("red") << 1;
+    QTest::newRow("blue") << 101;
+  }
+
+  void testOfficialGlobalHealth() {
+    QFETCH(int, currentId);
+    GameData data;
+    data.setMyRobotId(currentId);
+    const QList<int> ids = currentId == 1 ? QList<int>{1,3,4,7,101,103,104,107}
+                                          : QList<int>{101,103,104,107,1,3,4,7};
+    robomaster::GlobalUnitStatus status;
+    for (int i = 0; i < 8; ++i) { status.add_robot_health(100 + i); status.add_robot_bullets(900 + i); }
+    QSignalSpy spy(&data, &GameData::robotDataUpdated);
+    data.updateGlobalUnitStatus(status);
+    QCOMPARE(spy.count(), 8);
+    for (int i = 0; i < 8; ++i) {
+      const auto *robot = data.getRobotById(ids[i]);
+      QCOMPARE(robot->currentHP, 100 + i);
+      QCOMPARE(robot->tabGlobalCurrentHP, 100 + i);
+      QCOMPARE(robot->status, RobotStatus::OFFLINE);
+      QCOMPARE(robot->allowedAmmo17mm, 0);
+      QCOMPARE(robot->allowedAmmo42mm, 0);
+    }
+    QCOMPARE(data.redRobotTotalHP(), currentId == 1 ? 406 : 422);
+    QCOMPARE(data.blueRobotTotalHP(), currentId == 1 ? 422 : 406);
+    robomaster::GlobalUnitStatus shortStatus;
+    shortStatus.add_robot_health(77);
+    shortStatus.add_robot_health(88);
+    data.updateGlobalUnitStatus(shortStatus);
+    QCOMPARE(data.getRobotById(ids[0])->currentHP, 77);
+    QCOMPARE(data.getRobotById(ids[1])->currentHP, 88);
+    QCOMPARE(data.getRobotById(ids[2])->currentHP, 102);
+    QCOMPARE(data.getRobotById(ids[4])->currentHP, 104);
+    QCOMPARE(data.redRobotTotalHP(), currentId == 1 ? 406 : 422);
+    robomaster::GlobalUnitStatus empty;
+    data.updateGlobalUnitStatus(empty);
+    QCOMPARE(data.getRobotById(ids[0])->currentHP, 77);
+    robomaster::RobotStaticStatus connected;
+    connected.set_robot_id(ids[0]);
+    connected.set_connection_state(1);
+    connected.set_alive_state(1);
+    data.updateRobotStaticStatus(connected);
+    robomaster::GlobalUnitStatus dead;
+    dead.add_robot_health(0);
+    data.updateGlobalUnitStatus(dead);
+    QCOMPARE(data.getRobotById(ids[0])->currentHP, 0);
+    QCOMPARE(data.getRobotById(ids[0])->status, RobotStatus::DESTROYED);
+    QVERIFY(data.getRobotById(ids[0])->isClientConnected);
+    data.setMyRobotId(257);
+    QCOMPARE(data.getCurrentRobotId(), 0);
+    spy.clear();
+    data.updateGlobalUnitStatus(status);
+    QCOMPARE(spy.count(), 0);
+    QCOMPARE(data.getRobotById(ids[0])->currentHP, 0);
+  }
+
+  void testEventOneIdentityAndInvalidIds() {
+    GameData data;
+    QSignalSpy kills(&data, &GameData::killEventOccurred);
+    QSignalSpy popups(&data, &GameData::officialEventPopupRequested);
+    QSignalSpy messages(&data, &GameData::systemMessageReceived);
+    robomaster::RoboMasterMessage msg;
+    auto *event = msg.mutable_event();
+    event->set_event_id(1);
+    event->set_param("1,101");
+    data.processProtocolData(msg);
+    QCOMPARE(kills.count(), 1);
+    QCOMPARE(popups.count(), 1);
+    QVERIFY(popups.last().at(1).toString().contains(QStringLiteral("蓝方重装机器人击毁了红方重装机器人")));
+    QVERIFY(messages.last().at(0).toString().contains(QStringLiteral("蓝方重装机器人击毁了红方重装机器人")));
+    event->set_param("101,1");
+    data.processProtocolData(msg);
+    QCOMPARE(kills.count(), 2);
+    QVERIFY(popups.last().at(1).toString().contains(QStringLiteral("红方重装机器人击毁了蓝方重装机器人")));
+    for (const char *param : {"1,2", "257,101", "1,201", "1,-1", "bad,1"}) {
+      event->set_param(param);
+      data.processProtocolData(msg);
+    }
+    QCOMPARE(kills.count(), 2);
+    event->set_event_id(16);
+    event->set_param("");
+    data.processProtocolData(msg);
+    QVERIFY(data.event16Received());
+  }
+
   /**
    * @brief 初始化测试
    * 验证 GameData 初始化后的默认状态是否正确。
@@ -40,11 +183,10 @@ private slots:
     GameData gameData;
 
     // 验证默认机器人数量
-    QCOMPARE(gameData.getAllRobots().size(),
-             12); // 每方初始化 6 台可见机器人（1、2、3、4、6、7）；
-                  // 当前客户端界面不显示 5/105。
-    QVERIFY(gameData.getRobotById(5) == nullptr);
-    QVERIFY(gameData.getRobotById(105) == nullptr);
+    QCOMPARE(gameData.getAllRobots().size(), 16);
+    QVERIFY(gameData.getRobotById(5) != nullptr);
+    QVERIFY(gameData.getRobotById(105) != nullptr);
+    QVERIFY(gameData.getRobotById(2) == nullptr);
 
     // 验证默认比赛阶段
     QCOMPARE(gameData.getCurrentStage(), GameStage::NOT_STARTED);

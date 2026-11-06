@@ -27,6 +27,10 @@ add_test(
 )
 
 # 比赛状态测试
+add_executable(test_robot_identity unit/test_robot_identity.cpp)
+target_link_libraries(test_robot_identity PRIVATE Qt6::Core Qt6::Test RoboMasterClientLib)
+rm26_add_qt_test(TestRobotIdentity test_robot_identity)
+
 add_executable(test_game_data unit/test_game_data.cpp)
 target_link_libraries(test_game_data PRIVATE Qt6::Core Qt6::Test RoboMasterClientLib)
 rm26_add_qt_test(TestGameData test_game_data)

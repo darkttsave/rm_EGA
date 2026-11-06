@@ -344,17 +344,13 @@ bool Protocol::parsePacket(const QByteArray &packet,
       auto *status = message.mutable_global_unit_status();
       status->set_base_health(data.ally_base_HP);
       status->set_base_status(data.ally_base_HP == 0 ? 3 : 1);
-      status->set_outpost_health(data.ally_outpost_HP);
-      status->set_outpost_status(data.ally_outpost_HP == 0 ? 3 : 1);
+      // R/B 前哨与旧内部字段的语义差异另行迁移，保留原字段入口。
+      status->set_outpost_health(data.outpost_R_HP);
+      status->set_outpost_status(data.outpost_R_HP == 0 ? 3 : 1);
       status->add_robot_health(data.ally_1_robot_HP);
-      status->add_robot_health(data.ally_2_robot_HP);
       status->add_robot_health(data.ally_3_robot_HP);
-      if (data.ally_4_robot_HP > 0 || data.ally_7_robot_HP > 0) {
-        status->add_robot_health(data.ally_4_robot_HP);
-        if (data.ally_7_robot_HP > 0) {
-          status->add_robot_health(data.ally_7_robot_HP);
-        }
-      }
+      status->add_robot_health(data.ally_4_robot_HP);
+      status->add_robot_health(data.ally_7_robot_HP);
       hasPayload = true;
     }
     break;

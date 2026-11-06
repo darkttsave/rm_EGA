@@ -56,7 +56,8 @@ enum class RobotType : quint8 {
   AERIAL = 6,     // 空中机器人
   SENTRY = 7,     // 哨兵
   DART = 8,       // 飞镖
-  RADAR = 9       // 雷达站
+  RADAR = 9,      // 雷达站
+  HEAVY = 10      // 2027 重装；与旧英雄区分，不代表协议 robot_type 数值
 };
 
 /**
@@ -99,7 +100,7 @@ enum class CmdID : quint16 {
   VIDEO_DATA = 0x0009,        // 视频数据
   GAME_STATUS = 0x0001,       // 比赛状态 (11字节, 1Hz)
   GAME_RESULT = 0x0002,       // 比赛结果 (1字节)
-  GAME_ROBOT_HP = 0x0003,     // 机器人血量 (16字节, 3Hz)
+  GAME_ROBOT_HP = 0x0003,     // 机器人血量 (2027: 24 字节)
   EVENT_DATA = 0x0101,        // 场地事件数据 (4字节)
   PROJECTILE_SUPPLY = 0x0102, // 补给站动作 (3字节)
   REFEREE_WARNING = 0x0104,   // 裁判警告数据 (3字节)
@@ -147,18 +148,22 @@ struct game_result_t {
 
 /**
  * @struct game_robot_HP_t
- * @brief 0x0003 机器人血量数据 (官方表1-7)
- * @details 数据长度: 16字节, 频率: 3Hz, 只发送己方血量
+ * @brief 2027 0x0003 机器人血量数据（官方表 1-8）
+ * @details 24 字节，机器人血量为己方 1、3、4、7 号。
  */
 struct game_robot_HP_t {
-  quint16 ally_1_robot_HP; // 己方1号英雄
-  quint16 ally_2_robot_HP; // 己方2号工程
+  quint16 ally_1_robot_HP; // 己方1号重装
+  quint16 reserved;        // 保留位
   quint16 ally_3_robot_HP; // 己方3号步兵
   quint16 ally_4_robot_HP; // 己方4号步兵
-  quint16 reserved;        // 保留位
+  qint16 damage_difference;
   quint16 ally_7_robot_HP; // 己方7号哨兵
-  quint16 ally_outpost_HP; // 己方前哨站
+  quint16 outpost_R_HP;    // R 前哨
   quint16 ally_base_HP;    // 己方基地
+  quint16 outpost_B_HP;    // B 前哨
+  quint16 enemy_base_HP;   // 对方基地
+  quint16 ally_control_degree;
+  quint16 enemy_control_degree;
 };
 
 /**

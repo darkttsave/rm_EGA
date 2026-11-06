@@ -1048,7 +1048,25 @@ void NetworkManager::processData(const QByteArray &data) {
         }
 #endif
       }
-      m_gameData->processProtocolData(message);
+      // 0/200/201 仅是特定 UDP 命令生成的内部标签；普通身份消息不得触发。
+      quint16 command = 0;
+      if (!data.isEmpty() && static_cast<quint8>(data.at(0)) == 0xA5) {
+        FrameHeader header{};
+        std::memcpy(&header, data.constData(), sizeof(header));
+        command = header.cmdId;
+      } else {
+        SimpleFrameHeader header{};
+        std::memcpy(&header, data.constData(), sizeof(header));
+        command = header.cmdId;
+      }
+      const bool taggedStatus = message.has_robot_status() &&
+          ((command == static_cast<quint16>(CmdID::POWER_HEAT) && message.robot_status().id() == 0) ||
+           (command == static_cast<quint16>(CmdID::SHOOT_DATA) && message.robot_status().id() == 201) ||
+           (command == static_cast<quint16>(CmdID::BULLET_REMAINING) && message.robot_status().id() == 200));
+      if (taggedStatus)
+        m_gameData->updateLegacyRobotData(message.robot_status());
+      else
+        m_gameData->processProtocolData(message);
     }
   } else {
     // 解析失败时静默丢弃。
@@ -1551,14 +1569,13 @@ void NetworkManager::parseCustomByteBlock(const QByteArray &data) {
 
     // 获取当前机器人ID
     quint8 robotId = m_gameData->getMyRobotId();
-    if (robotId == 0 && !m_gameData->getAllRobots().isEmpty()) {
-        robotId = m_gameData->getAllRobots().first().robotId;
-    }
     if (robotId == 0) {
         return;
     }
 
-    RobotData& robot = m_gameData->getRobotDataRef(robotId);
+    RobotData *robotPtr = m_gameData->getRobotDataRef(robotId);
+    if (!robotPtr) return;
+    RobotData& robot = *robotPtr;
 
     // 解析摩擦轮/拨弹轮状态
     robot.fricEnabled = status.friction_status.bits.fric_enabled;

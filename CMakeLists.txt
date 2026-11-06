@@ -325,6 +325,7 @@ set(SOURCES
     src/network/S1ProtocolManager.cpp
     ${PROTO_SRCS}
     src/core/GameData.cpp
+    src/core/RobotIdentity.cpp
     src/core/MapProfile.cpp
     src/core/LogFileNaming.cpp
     src/core/TimedEventRules.cpp
@@ -374,6 +375,7 @@ set(HEADERS
     src/network/H264StreamRecoveryPolicy.h
     src/network/S1ProtocolManager.h
     src/core/GameData.h
+    src/core/RobotIdentity.h
     src/core/MapProfile.h
     src/core/LogFileNaming.h
     src/core/TimedEventRules.h

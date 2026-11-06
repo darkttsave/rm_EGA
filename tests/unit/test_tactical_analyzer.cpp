@@ -33,7 +33,7 @@ private slots:
 
         GameData gameData;
         gameData.setCurrentRobotId(1);
-        gameData.getRobotDataRef(1).level = robotLevel;
+        gameData.getRobotDataRef(1)->level = robotLevel;
         gameData.setRedEconomy(economy);
         gameData.updateGameStateFromS1(
             static_cast<int>(GameStage::BATTLE), remainingTime, 0, 0, 1, false);
@@ -51,7 +51,7 @@ private slots:
     void testRespawnEconomyUsesBluePerspective() {
         GameData gameData;
         gameData.setCurrentRobotId(101);
-        gameData.getRobotDataRef(101).level = 4;
+        gameData.getRobotDataRef(101)->level = 4;
         gameData.setRedEconomy(9999);
         gameData.setBlueEconomy(399);
         gameData.updateGameStateFromS1(
@@ -236,7 +236,7 @@ private slots:
         RM::TacticalAnalyzer analyzer(&gameData);
         analyzer.setUseMockData(false);
 
-        RobotData &enemyHero = gameData.getRobotDataRef(101);
+        RobotData &enemyHero = *gameData.getRobotDataRef(101);
         enemyHero.hasTabGlobalSnapshot = true;
         enemyHero.tabGlobalCurrentHP = 300;
         QSignalSpy paidRespawnSpy(
@@ -265,7 +265,7 @@ private slots:
         RM::TacticalAnalyzer analyzer(&gameData);
         analyzer.setUseMockData(false);
 
-        RobotData &enemyHero = gameData.getRobotDataRef(1);
+        RobotData &enemyHero = *gameData.getRobotDataRef(1);
         enemyHero.tabStaticConnected = true;
         enemyHero.currentHP = 600;
         enemyHero.hasTabGlobalSnapshot = true;
