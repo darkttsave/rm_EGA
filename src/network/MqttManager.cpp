@@ -1,3 +1,4 @@
+#include <chrono>
 // SPDX-License-Identifier: MIT
 /**
  * @file MqttManager.cpp
@@ -313,6 +314,8 @@ int MqttManager::messageArrivedCallback(void *context, char *topicName,
   QByteArray payload((const char *)message->payload, message->payloadlen);
   const qint64 receivedMs = QDateTime::currentMSecsSinceEpoch();
   const quint64 generation = self->m_connectionGeneration.load();
+  const quint64 identityGeneration = self->m_identityGeneration.load();
+  const qint64 monotonicMs = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
   const bool detailedTrace =
       !isHighRateVideoMessage(topic, payload) || verboseVideoLogEnabled();
   bool sampledVideoObservation = false;
@@ -349,12 +352,15 @@ int MqttManager::messageArrivedCallback(void *context, char *topicName,
 
   QMetaObject::invokeMethod(
       self,
-      [self, topic, payload, payloadSha1, receivedMs, observeMessage, generation]() {
-        if ((topic == QLatin1String("RobotModuleStatus") || topic == QLatin1String("RobotDynamicStatus")) && generation != self->m_connectionGeneration.load()) return;
+      [self, topic, payload, payloadSha1, receivedMs, monotonicMs, observeMessage, generation, identityGeneration]() {
+        if ((topic == QLatin1String("RobotModuleStatus") || topic == QLatin1String("RobotDynamicStatus") || topic == QLatin1String("RobotStaticStatus") || topic == QLatin1String("GameStatus") || topic == QLatin1String("Event")) && generation != self->m_connectionGeneration.load()) return;
+        if ((topic == QLatin1String("RobotModuleStatus") || topic == QLatin1String("RobotDynamicStatus")) &&
+            identityGeneration != self->m_identityGeneration.load()) return;
         if (observeMessage) {
           emit self->messageObserved(topic, payload.size(), payloadSha1,
                                      receivedMs);
         }
+        emit self->messageReceivedWithMetadata(topic, payload, receivedMs, monotonicMs);
         emit self->messageReceived(topic, payload);
       },
       Qt::QueuedConnection);
@@ -369,11 +375,12 @@ void MqttManager::connectionLostCallback(void *context, char *cause) {
   if (!self)
     return;
 
-  ++self->m_connectionGeneration;
+  const quint64 lostGeneration = ++self->m_connectionGeneration;
   QString reason = cause ? QString::fromUtf8(cause) : "Unknown";
   QMetaObject::invokeMethod(
       self,
-      [self, reason]() {
+      [self, reason, lostGeneration]() {
+        if (lostGeneration != self->m_connectionGeneration.load()) return;
         self->m_connected = false;
         qWarning() << "MqttManager: Connection lost, reason:" << reason;
 

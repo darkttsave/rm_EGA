@@ -73,6 +73,7 @@ public:
    * @brief 断开连接
    */
   void disconnect();
+  void invalidateQueuedObservations() { ++m_identityGeneration; }
 
   /**
    * @brief 检查是否已连接
@@ -114,6 +115,7 @@ signals:
    * @param payload 消息载荷
    */
   void messageReceived(const QString &topic, const QByteArray &payload);
+  void messageReceivedWithMetadata(const QString &topic, const QByteArray &payload, qint64 receivedMs, qint64 monotonicMs);
 
   /**
    * @brief 接收到 MQTT 消息时的本地观测信号
@@ -167,6 +169,7 @@ private:
   // 压垮 UI，同时不破坏 messageObserved 的诊断契约。
   std::atomic<qint64> m_lastVideoObservationMs{0};
   std::atomic<quint64> m_connectionGeneration{0};
+  std::atomic<quint64> m_identityGeneration{0};
 
   // --- 消息回调处理 ---
   static int messageArrivedCallback(void *context, char *topicName,

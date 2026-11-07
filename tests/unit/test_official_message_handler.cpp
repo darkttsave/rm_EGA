@@ -19,9 +19,15 @@
 using RM::OfficialMessageHandler;
 namespace {
 std::atomic<bool> dynamicCallbackObserved{false};
+std::atomic<unsigned> observedQueuedTopics{0};
 void captureDynamicCallback(QtMsgType, const QMessageLogContext &, const QString &message) {
   if (message.contains(QStringLiteral("RM26_MQTT_RX_TIMING direction=rx topic=RobotDynamicStatus")))
     dynamicCallbackObserved.store(true);
+  if (message.contains("RM26_MQTT_RX_TIMING direction=rx topic=RobotDynamicStatus")) observedQueuedTopics.fetch_or(1);
+  if (message.contains("RM26_MQTT_RX_TIMING direction=rx topic=GameStatus")) observedQueuedTopics.fetch_or(2);
+  if (message.contains("RM26_MQTT_RX_TIMING direction=rx topic=RobotStaticStatus")) observedQueuedTopics.fetch_or(4);
+  if (message.contains("RM26_MQTT_RX_TIMING direction=rx topic=Event")) observedQueuedTopics.fetch_or(8);
+  if (message.contains("RM26_MQTT_RX_TIMING direction=rx topic=RobotModuleStatus")) observedQueuedTopics.fetch_or(16);
 }
 QStringList detailedLogs;
 void captureDetails(QtMsgType type, const QMessageLogContext &, const QString &message) {
@@ -157,14 +163,14 @@ private slots:
       }
       QVERIFY(!snapshot.contains("modular_42mm"));
     }
-    QVERIFY(summary->property("text").toString().contains(QStringLiteral("当前权限值: 未收到")));
+    QVERIFY(summary->property("text").toString().contains(QStringLiteral("最近权限原值: 未收到")));
     for (int value : {0, 1, 9}) {
       msg.set_modular_42mm(value);
       QCOMPARE(OfficialMessageHandler::handle("RobotModuleStatus", bytes(msg), data), OfficialMessageHandler::Result::Parsed);
       QCOMPARE(data.robotModuleStatus().value("modular_42mm").toInt(), value);
       const QString expected = value == 0 ? QStringLiteral("0（未拥有）") : value == 1 ? QStringLiteral("1（拥有）") : QStringLiteral("非法值 9");
       QTRY_VERIFY(summary->property("text").toString().contains(expected));
-      QVERIFY(summary->property("text").toString().contains(value == 9 ? QStringLiteral("已确认: 否") : QStringLiteral("已确认: 是")));
+      QVERIFY(summary->property("text").toString().contains(QStringLiteral("本会话已上报: 否")));
     }
     const QVariantMap saved = data.robotModuleStatus();
     QCOMPARE(OfficialMessageHandler::handle("RobotModuleStatus", QByteArray::fromHex("5880"), data), OfficialMessageHandler::Result::ParseFailed);
@@ -184,7 +190,7 @@ private slots:
     QCOMPARE(data.robotModuleStatus().value("robotId").toInt(), 101);
     data.setCurrentRobotId(3);
     QCOMPARE(OfficialMessageHandler::handle("RobotModuleStatus", bytes(msg), data), OfficialMessageHandler::Result::Parsed);
-    QVERIFY(summary->property("text").toString().contains(QStringLiteral("已确认: 否")));
+    QVERIFY(summary->property("text").toString().contains(QStringLiteral("本会话已上报: 否")));
     QVERIFY(summary->property("text").toString().contains(QStringLiteral("不适用（原始值 1）")));
     data.setCurrentRobotId(2);
     QCOMPARE(OfficialMessageHandler::handle("RobotModuleStatus", bytes(msg), data), OfficialMessageHandler::Result::Parsed);
@@ -234,42 +240,118 @@ private slots:
     QProcess broker; broker.start(QStringLiteral("mosquitto"), {QStringLiteral("-p"), QString::number(port)});
     QVERIFY(broker.waitForStarted()); QTest::qWait(150);
     GameData data; data.setCurrentRobotId(1); RM::NetworkManager network(&data);
+    auto metadata = [&]() { return data.mqttReceptionMetadata(); };
+    auto topicMeta = [&](const char *name) { return metadata().value("topics").toMap().value(QLatin1String(name)).toMap(); };
+    QVERIFY(!metadata().value("connected").toBool());
+    QCOMPARE(topicMeta("GameStatus").value("sessionState").toString(), QString("never"));
     const QString uri = QStringLiteral("tcp://127.0.0.1:%1").arg(port);
     QSignalSpy connected(&network, &RM::NetworkManager::mqttConnectCompleted);
     network.startMqtt(uri, QStringLiteral("1"));
     QTRY_VERIFY_WITH_TIMEOUT(!connected.isEmpty(), 5000); QVERIFY(network.isMqttConnected());
+    QVERIFY(metadata().value("connected").toBool());
+    const auto session1 = metadata().value("session").toULongLong(); QVERIFY(session1 > 0);
     MqttManager publisher; QSignalSpy pubConnected(&publisher, &MqttManager::connectCompleted);
     publisher.connectToBrokerAsync(uri, QStringLiteral("a1-test-publisher"));
     QTRY_VERIFY_WITH_TIMEOUT(!pubConnected.isEmpty(), 5000); QVERIFY(publisher.isConnected());
     robomaster::RobotDynamicStatus msg; msg.set_current_heat(12.5f);
     QVERIFY(publisher.publish(QStringLiteral("RobotDynamicStatus"), bytes(msg), 1));
     QTRY_COMPARE_WITH_TIMEOUT(data.robotDynamicStatus().value("accepted").toMap().value("current_heat").toFloat(), 12.5f, 5000);
+    QCOMPARE(topicMeta("RobotDynamicStatus").value("sessionState").toString(), QString("current"));
+    QCOMPARE(topicMeta("RobotDynamicStatus").value("identity").toInt(), 1);
+    QVERIFY(topicMeta("RobotDynamicStatus").value("receivedAt").toDateTime().isValid());
+    QVERIFY(topicMeta("RobotDynamicStatus").value("receivedMonotonicMs").toLongLong() > 0);
+    robomaster::GameStatus gs; gs.set_current_stage(4); gs.set_red_score(0); gs.set_stage_countdown_sec(200);
+    QVERIFY(publisher.publish("GameStatus", bytes(gs), 1));
+    QTRY_COMPARE_WITH_TIMEOUT(topicMeta("GameStatus").value("sessionState").toString(), QString("current"), 5000);
+    const auto redStamp = topicMeta("GameStatus").value("fieldUpdates").toMap().value("red_score").toMap();
+    QVERIFY(redStamp.value("receivedAt").toDateTime().isValid());
+    gs.Clear(); gs.set_blue_score(2);
+    QVERIFY(publisher.publish("GameStatus", bytes(gs), 1));
+    QTRY_COMPARE_WITH_TIMEOUT(data.blueScore(), 2, 5000);
+    QCOMPARE(topicMeta("GameStatus").value("fieldUpdates").toMap().value("red_score").toMap(), redStamp);
+    robomaster::RobotStaticStatus ss; ss.set_robot_id(1); ss.set_max_health(300);
+    QVERIFY(publisher.publish("RobotStaticStatus", bytes(ss), 1));
+    QTRY_VERIFY_WITH_TIMEOUT(metadata().value("staticByRobot").toMap().contains("1"), 5000);
+    ss.set_robot_id(101); ss.set_max_health(400);
+    QVERIFY(publisher.publish("RobotStaticStatus", bytes(ss), 1));
+    QTRY_VERIFY_WITH_TIMEOUT(metadata().value("staticByRobot").toMap().contains("101"), 5000);
+    QCOMPARE(data.getRobotById(1)->maxHP, 300); QCOMPARE(data.getRobotById(101)->maxHP, 400);
+    robomaster::Event event; event.set_event_id(16);
+    QVERIFY(publisher.publish("Event", bytes(event), 1));
+    QTRY_COMPARE_WITH_TIMEOUT(topicMeta("Event16").value("sessionState").toString(), QString("current"), 5000);
+    QCOMPARE(topicMeta("Event16").value("identity").toInt(), 0);
+    const auto eventTime = data.event16LastReceivedAt();
     data.setCurrentRobotId(101);
+    QCOMPARE(topicMeta("RobotDynamicStatus").value("sessionState").toString(), QString("identity_changed"));
     QVERIFY(publisher.publish(QStringLiteral("RobotDynamicStatus"), bytes(msg), 1));
     QTest::qWait(200); QVERIFY(!data.robotDynamicStatus().value("received").toBool());
     data.setCurrentRobotId(1);
-    // Ensure a callback has queued the old message while the Qt thread remains blocked.
+    QCOMPARE(topicMeta("RobotDynamicStatus").value("sessionState").toString(), QString("identity_changed"));
+    // Returning to the same identity must not revalidate a message queued before the switch.
     dynamicCallbackObserved.store(false);
+    const auto identityHandler = qInstallMessageHandler(captureDynamicCallback);
+    msg.set_current_heat(55.5f);
+    const bool identitySent = publisher.publish("RobotDynamicStatus", bytes(msg), 1);
+    for (int i = 0; i < 100 && !dynamicCallbackObserved.load(); ++i) QThread::msleep(10);
+    const bool identitySeen = dynamicCallbackObserved.load();
+    data.setCurrentRobotId(101); data.setCurrentRobotId(1);
+    QCoreApplication::processEvents();
+    qInstallMessageHandler(identityHandler);
+    QVERIFY(identitySent); QVERIFY(identitySeen);
+    QVERIFY(!data.robotDynamicStatus().value("received").toBool());
+    QCOMPARE(topicMeta("RobotDynamicStatus").value("sessionState").toString(), QString("identity_changed"));
+    // Ensure a callback has queued the old message while the Qt thread remains blocked.
+    dynamicCallbackObserved.store(false); observedQueuedTopics.store(0);
     const auto oldHandler = qInstallMessageHandler(captureDynamicCallback);
     msg.set_current_heat(88.5f);
     const bool sent = publisher.publish(QStringLiteral("RobotDynamicStatus"), bytes(msg), 1);
-    for (int i = 0; i < 100 && !dynamicCallbackObserved.load(); ++i) QThread::msleep(10);
-    const bool callbackSeen = dynamicCallbackObserved.load();
+    gs.Clear(); gs.set_red_score(999); publisher.publish("GameStatus", bytes(gs), 1);
+    ss.set_robot_id(1); ss.set_max_health(999); publisher.publish("RobotStaticStatus", bytes(ss), 1);
+    event.set_event_id(16); publisher.publish("Event", bytes(event), 1);
+    robomaster::RobotModuleStatus queuedModule; queuedModule.set_modular_42mm(1);
+    publisher.publish("RobotModuleStatus", bytes(queuedModule), 1);
+    for (int i = 0; i < 200 && observedQueuedTopics.load() != 31; ++i) QThread::msleep(10);
+    const bool callbackSeen = dynamicCallbackObserved.load() && observedQueuedTopics.load() == 31;
     network.stopMqtt();
     data.setCurrentRobotId(101);
     QCoreApplication::processEvents();
     qInstallMessageHandler(oldHandler);
     QVERIFY(sent); QVERIFY(callbackSeen);
+    QCOMPARE(data.redScore(), 0); QCOMPARE(data.getRobotById(1)->maxHP, 300);
+    QCOMPARE(data.event16LastReceivedAt(), eventTime);
+    QCOMPARE(topicMeta("RobotModuleStatus").value("sessionState").toString(), QString("never"));
+    QCOMPARE(topicMeta("GameStatus").value("sessionState").toString(), QString("disconnected"));
     QVERIFY(!data.robotDynamicStatus().value("received").toBool());
     connected.clear(); network.startMqtt(uri, QStringLiteral("101"));
     QTRY_VERIFY_WITH_TIMEOUT(!connected.isEmpty(), 5000); QVERIFY(network.isMqttConnected());
-    msg.set_current_heat(22.25f);
+    QVERIFY(metadata().value("session").toULongLong() > session1);
+    QCOMPARE(topicMeta("GameStatus").value("sessionState").toString(), QString("historical"));
+    QCOMPARE(topicMeta("Event16").value("sessionState").toString(), QString("historical"));
+    QCOMPARE(topicMeta("RobotDynamicStatus").value("sessionState").toString(), QString("historical"));
+    msg.set_current_heat(22.25f); msg.set_remaining_ammo(7);
     QVERIFY(publisher.publish(QStringLiteral("RobotDynamicStatus"), bytes(msg), 1));
     QTRY_COMPARE_WITH_TIMEOUT(data.robotDynamicStatus().value("accepted").toMap().value("current_heat").toFloat(), 22.25f, 5000);
     QCOMPARE(data.robotDynamicStatus().value("robotId").toInt(), 101);
+    QCOMPARE(topicMeta("RobotDynamicStatus").value("sessionState").toString(), QString("current"));
+    const auto ammoStamp = topicMeta("RobotDynamicStatus").value("fieldUpdates").toMap().value("remaining_ammo").toMap();
+    QVERIFY(ammoStamp.value("receivedAt").toDateTime().isValid());
+    network.stopMqtt();
+    QCOMPARE(topicMeta("RobotDynamicStatus").value("sessionState").toString(), QString("disconnected"));
+    QVERIFY(data.robotDynamicStatus().value("received").toBool());
+    connected.clear(); network.startMqtt(uri, QStringLiteral("101"));
+    QTRY_VERIFY_WITH_TIMEOUT(!connected.isEmpty(), 5000); QVERIFY(network.isMqttConnected());
+    QCOMPARE(topicMeta("RobotDynamicStatus").value("sessionState").toString(), QString("historical"));
+    QCOMPARE(data.robotDynamicStatus().value("accepted").toMap().value("current_heat").toFloat(), 22.25f);
+    msg.Clear(); msg.set_current_heat(23.5f); QVERIFY(publisher.publish("RobotDynamicStatus", bytes(msg), 1));
+    QTRY_COMPARE_WITH_TIMEOUT(data.robotDynamicStatus().value("accepted").toMap().value("current_heat").toFloat(), 23.5f, 5000);
+    QCOMPARE(topicMeta("RobotDynamicStatus").value("sessionState").toString(), QString("current"));
+    QCOMPARE(topicMeta("RobotDynamicStatus").value("fieldUpdates").toMap().value("remaining_ammo").toMap(), ammoStamp);
+    QVERIFY(ammoStamp.value("session").toULongLong() < metadata().value("session").toULongLong());
     broker.terminate(); QVERIFY(broker.waitForFinished(5000));
     QTRY_VERIFY_WITH_TIMEOUT(!network.isMqttConnected(), 5000);
-    QTRY_VERIFY_WITH_TIMEOUT(!data.robotDynamicStatus().value("received").toBool(), 5000);
+    QTRY_VERIFY_WITH_TIMEOUT(data.robotDynamicStatus().value("received").toBool(), 5000);
+    QTRY_COMPARE_WITH_TIMEOUT(topicMeta("RobotDynamicStatus").value("sessionState").toString(), QString("disconnected"), 5000);
+    QCOMPARE(data.robotDynamicStatus().value("accepted").toMap().value("current_heat").toFloat(), 23.5f);
     network.stopMqtt(); publisher.disconnect();
   }
 #endif
@@ -497,6 +579,49 @@ private slots:
     for (const QString &topic : {QString("GlobalUnitStatus"), QString("RobotStaticStatus"), QString("RobotDynamicStatus")})
       QCOMPARE(OfficialMessageHandler::handle(topic, invalid, data, logger), OfficialMessageHandler::Result::ParseFailed);
     QCOMPARE(data.redBaseHealth(), 3210); QCOMPARE(data.getRobotById(3)->currentHP, 345); QCOMPARE(logs, 3);
+  }
+  void mqttObservationMetadata() {
+    Q_INIT_RESOURCE(qml);
+    GameData data;
+    QQuickWidget panel; panel.rootContext()->setContextProperty("gameData", &data);
+    panel.setSource(QUrl(QStringLiteral("qrc:/qml/RM27DevPanel.qml")));
+    QCOMPARE(panel.status(), QQuickWidget::Ready);
+    auto *sessionView = panel.rootObject()->findChild<QObject *>("rm27MqttSession"); QVERIFY(sessionView);
+    auto metadata = [&]() { return data.mqttReceptionMetadata(); };
+    auto topic = [&](const char *key) { return metadata().value("topics").toMap().value(QLatin1String(key)).toMap(); };
+    QCOMPARE(topic("GameStatus").value("sessionState").toString(), QString("never"));
+    QVERIFY(sessionView->property("text").toString().contains(QStringLiteral("未连接")));
+    data.setMqttSessionState(true, "1");
+    data.recordMqttObservation("RobotDynamicStatus", 0, 100000, 1234);
+    data.recordMqttObservation("RobotModuleStatus", 0, 100000, 1234);
+    QCOMPARE(topic("RobotDynamicStatus").value("sessionState").toString(), QString("never"));
+    QCOMPARE(topic("RobotModuleStatus").value("sessionState").toString(), QString("never"));
+    const auto session = metadata().value("session").toULongLong(); QVERIFY(session > 0);
+    QVERIFY(sessionView->property("text").toString().contains(QStringLiteral("已连接")));
+    robomaster::GameStatus status; status.set_current_stage(4); status.set_red_score(0);
+    data.updateGameStatus(status); data.recordMqttObservation("GameStatus", 0, 100000, 1234);
+    auto first = topic("GameStatus").value("fieldUpdates").toMap().value("red_score").toMap();
+    QCOMPARE(first.value("receivedAt").toDateTime().toMSecsSinceEpoch(), qint64(100000));
+    QCOMPARE(first.value("receivedMonotonicMs").toLongLong(), qint64(1234));
+    status.Clear(); status.set_blue_score(2);
+    data.updateGameStatus(status); data.recordMqttObservation("GameStatus", 0, 200000, 2234);
+    QCOMPARE(topic("GameStatus").value("fieldUpdates").toMap().value("red_score").toMap(), first);
+    QCOMPARE(topic("GameStatus").value("receivedAt").toDateTime().toMSecsSinceEpoch(), qint64(200000));
+    const qint64 initialAge = topic("GameStatus").value("ageMs").toLongLong();
+    QTest::qWait(10); QVERIFY(topic("GameStatus").value("ageMs").toLongLong() >= initialAge);
+    status.Clear(); status.set_current_stage(99); data.updateGameStatus(status);
+    data.recordMqttObservation("GameStatus", 0, 300000, 3234);
+    QCOMPARE(topic("GameStatus").value("fieldUpdates").toMap().value("current_stage").toMap().value("receivedMonotonicMs").toLongLong(), qint64(1234));
+    data.setMqttSessionState(false, "1");
+    QCOMPARE(topic("GameStatus").value("sessionState").toString(), QString("disconnected"));
+    data.setMqttSessionState(true, "1");
+    QVERIFY(metadata().value("session").toULongLong() > session);
+    QCOMPARE(topic("GameStatus").value("sessionState").toString(), QString("historical"));
+    status.Clear(); status.set_red_score(3); data.updateGameStatus(status);
+    data.recordMqttObservation("GameStatus", 0, 400000, 4234);
+    QCOMPARE(topic("GameStatus").value("sessionState").toString(), QString("current"));
+    data.recordMqttObservation("Event16", 0, 500000, 5234);
+    QCOMPARE(topic("Event16").value("identity").toInt(), 0);
   }
   void gameStatusPresenceAndPanel() {
     Q_INIT_RESOURCE(qml);

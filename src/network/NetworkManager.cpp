@@ -1121,15 +1121,24 @@ void NetworkManager::startMqtt(const QString &brokerUri,
   // 创建 MQTT 管理器
   if (!m_mqttManager) {
     m_mqttManager = new MqttManager(this);
+    if (m_gameData) connect(m_gameData, &GameData::currentRobotIdentityChanged,
+                            m_mqttManager, &MqttManager::invalidateQueuedObservations);
 
     // 连接信号
     connect(m_mqttManager, &MqttManager::messageObserved, this,
             &NetworkManager::mqttMessageObserved);
-    connect(m_mqttManager, &MqttManager::messageReceived, this,
-            &NetworkManager::processMqttMessage);
+    connect(m_mqttManager, &MqttManager::messageReceivedWithMetadata, this,
+            [this](const QString &topic, const QByteArray &payload, qint64 wallMs, qint64 monotonicMs) {
+              m_receiptWallMs = wallMs;
+              m_receiptMonotonicMs = monotonicMs;
+              processMqttMessage(topic, payload);
+              m_receiptWallMs = 0;
+              m_receiptMonotonicMs = 0;
+            });
     connect(
         m_mqttManager, &MqttManager::connectionStateChanged, this,
         [this](bool connected) {
+          if (m_gameData) m_gameData->setMqttSessionState(connected, m_mqttManager->clientId());
           emit mqttConnectionStateChanged(connected);
           if (connected) {
             qDebug()
@@ -1138,7 +1147,10 @@ void NetworkManager::startMqtt(const QString &brokerUri,
             // 启动 MQTT 消息日志会话
             MqttLogger::instance()->startSession();
           } else {
-            if (m_gameData) m_gameData->clearRobotDynamicStatus();
+            m_hasMqttGameStatus = false;
+            m_hasMqttStage = false;
+            m_hasMqttRemaining = false;
+            m_hasMqttPaused = false;
             MqttLogger::instance()->stopSession();
           }
         });
@@ -1156,7 +1168,6 @@ void NetworkManager::startMqtt(const QString &brokerUri,
 }
 
 void NetworkManager::stopMqtt() {
-  if (m_gameData) m_gameData->clearRobotDynamicStatus();
   if (m_mqttManager) {
     m_mqttManager->disconnect();
   }
@@ -1236,9 +1247,11 @@ void NetworkManager::processMqttMessage(const QString &topic,
     return;
   }
 
+  QJsonObject parsedFields;
   const auto officialResult = OfficialMessageHandler::handle(
       topic, payload, *m_gameData,
       [&](const QString &detail, const QJsonObject &fields) {
+        parsedFields = fields;
         dumpMqttEvent(QStringLiteral("parsed"), topic, payload, m_gameData,
                       detail, fields);
       },
@@ -1257,6 +1270,17 @@ void NetworkManager::processMqttMessage(const QString &topic,
           m_lastMqttPaused = status.is_paused();
         }
       });
+
+  if (officialResult == OfficialMessageHandler::Result::Parsed && m_receiptWallMs > 0) {
+    if (topic == QLatin1String("GameStatus"))
+      m_gameData->recordMqttObservation(topic, 0, m_receiptWallMs, m_receiptMonotonicMs);
+    else if (topic == QLatin1String("RobotStaticStatus"))
+      m_gameData->recordMqttObservation(topic, parsedFields.value("robot_id").toInt(), m_receiptWallMs, m_receiptMonotonicMs);
+    else if (topic == QLatin1String("RobotDynamicStatus") || topic == QLatin1String("RobotModuleStatus"))
+      m_gameData->recordMqttObservation(topic, m_gameData->getCurrentRobotId(), m_receiptWallMs, m_receiptMonotonicMs);
+    else if (topic == QLatin1String("Event") && parsedFields.value("event_id").toInt() == 16)
+      m_gameData->recordMqttObservation(QStringLiteral("Event16"), 0, m_receiptWallMs, m_receiptMonotonicMs);
+  }
 
   if (topic == QLatin1String("RobotModuleStatus") && officialResult == OfficialMessageHandler::Result::ParseFailed) {
     dumpMqttEvent(QStringLiteral("parse_failed"), topic, payload, m_gameData,

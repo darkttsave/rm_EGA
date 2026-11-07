@@ -20,6 +20,7 @@
 #include <QVariantMap>
 #include <algorithm>
 #include <cmath>
+#include <chrono>
 #include "PopupStateMachine.h"
 
 static QString getRobotName(int robotId);
@@ -550,6 +551,9 @@ void GameData::setCurrentRobotId(qint64 robotId) {
   const auto previous = RM::resolveRobotIdentity(m_currentRobotId);
   if (m_currentRobotId == next) return;
   m_currentRobotId = next;
+  ++m_mqttIdentityEpoch;
+  emit currentRobotIdentityChanged();
+  emit mqttReceptionMetadataChanged();
   clearRobotDynamicStatus();
   m_robotModuleStatusMap.clear();
   m_robotModuleStatusReceived = false;
@@ -1947,6 +1951,94 @@ void GameData::updateRobotStaticStatus(const robomaster::RobotStaticStatus &data
     emitDataChanged();
 
 }
+}
+
+void GameData::setMqttSessionState(bool connected, const QString &clientId) {
+  if (connected && !m_mqttSessionConnected) ++m_mqttSession;
+  m_mqttSessionConnected = connected;
+  if (connected) m_mqttSessionIdentity = clientId;
+  emit mqttReceptionMetadataChanged();
+}
+
+QVariantMap GameData::mqttReceptionMetadata() const {
+  auto annotate = [&](QVariantMap record, bool identitySensitive) {
+    if (record.isEmpty()) return QVariantMap{{"received", false}, {"sessionState", "never"}};
+    QString state = !m_mqttSessionConnected ? "disconnected" :
+        record.value("session").toULongLong() != m_mqttSession ? "historical" :
+        identitySensitive && (record.value("identity").toInt() != m_currentRobotId ||
+            record.value("identityEpoch").toULongLong() != m_mqttIdentityEpoch) ? "identity_changed" : "current";
+    record["sessionState"] = state;
+    const qint64 now = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    record["ageMs"] = std::max<qint64>(0, now - record.value("receivedMonotonicMs").toLongLong());
+    return record;
+  };
+  QVariantMap topics;
+  for (const char *name : {"GameStatus", "RobotDynamicStatus", "RobotModuleStatus", "Event16"}) {
+    const QString key = QString::fromLatin1(name);
+    topics[key] = annotate(m_mqttTopicMetadata.value(key).toMap(),
+        key == QLatin1String("RobotDynamicStatus") || key == QLatin1String("RobotModuleStatus"));
+  }
+  QVariantMap staticRobots;
+  for (auto it = m_mqttStaticMetadata.cbegin(); it != m_mqttStaticMetadata.cend(); ++it)
+    staticRobots[it.key()] = annotate(it.value().toMap(), false);
+  return {{"connected", m_mqttSessionConnected}, {"session", QVariant::fromValue(m_mqttSession)},
+          {"clientId", m_mqttSessionIdentity}, {"configuredIdentity", m_currentRobotId},
+          {"topics", topics}, {"staticByRobot", staticRobots}};
+}
+
+void GameData::recordMqttObservation(const QString &topic, int identity, qint64 receivedMs, qint64 monotonicMs) {
+  if (!m_mqttSessionConnected || receivedMs <= 0) return;
+  const bool isStatic = topic == QLatin1String("RobotStaticStatus");
+  const bool isIdentityScoped = topic == QLatin1String("RobotDynamicStatus") || topic == QLatin1String("RobotModuleStatus");
+  if (isIdentityScoped) {
+    const auto resolved = RM::resolveRobotIdentity(identity);
+    if (resolved.kind != RM::IdentityKind::Robot || !resolved.team) return;
+  }
+  if (isStatic && !getRobotById(identity)) return;
+  const QString key = isStatic ? QString::number(identity) : topic;
+  QVariantMap &container = isStatic ? m_mqttStaticMetadata : m_mqttTopicMetadata;
+  QVariantMap record = container.value(key).toMap();
+  QVariantMap fieldUpdates = record.value("fieldUpdates").toMap();
+  // No-ID fields belong to their observed identity, never a newly selected robot.
+  if ((topic == QLatin1String("RobotDynamicStatus") || topic == QLatin1String("RobotModuleStatus")) &&
+      record.contains("identity") && (record.value("identity").toInt() != identity ||
+      record.value("identityEpoch").toULongLong() != m_mqttIdentityEpoch)) fieldUpdates.clear();
+  record["received"] = true;
+  record["receivedAt"] = QDateTime::fromMSecsSinceEpoch(receivedMs);
+  record["receivedMonotonicMs"] = monotonicMs;
+  record["session"] = QVariant::fromValue(m_mqttSession);
+  record["identity"] = identity;
+  record["identityEpoch"] = QVariant::fromValue(m_mqttIdentityEpoch);
+  record["source"] = QStringLiteral("official_mqtt");
+  QVariantMap fields;
+  if (topic == QLatin1String("GameStatus")) fields = m_gameStatusFields;
+  else if (topic == QLatin1String("RobotDynamicStatus")) fields = m_dynamicObservation;
+  else if (isStatic) {
+    const RobotData *robot = getRobotById(identity);
+    if (robot) {
+      const auto observed = robot->staticPerformanceObservation;
+      for (auto it = observed.cbegin(); it != observed.cend(); ++it) {
+        if (it.key() == QLatin1String("received")) continue;
+        const double value = it.value().toDouble();
+        const bool mode = it.key().startsWith(QLatin1String("performance_system_"));
+        const bool valid = std::isfinite(value) && value >= 0 && value <= 65535 &&
+            (!mode || (value >= 1 && value <= 2)) && (it.key() != QLatin1String("max_health") || value > 0);
+        fields[it.key()] = QVariantMap{{"state", valid ? "valid" : "invalid"}, {"value", it.value()}};
+      }
+    }
+  } else if (topic == QLatin1String("RobotModuleStatus")) {
+    for (auto it = m_robotModuleStatusMap.cbegin(); it != m_robotModuleStatusMap.cend(); ++it)
+      fields[it.key()] = QVariantMap{{"state", it.value().toUInt() <= (it.key() == QLatin1String("modular_42mm") ? 1u : 2u) ? "valid" : "invalid"}, {"value", it.value()}};
+  }
+  for (auto it = fields.cbegin(); it != fields.cend(); ++it) {
+    if (it.value().toMap().value("state").toString() == QLatin1String("valid"))
+      fieldUpdates[it.key()] = QVariantMap{{"receivedAt", QDateTime::fromMSecsSinceEpoch(receivedMs)},
+          {"receivedMonotonicMs", monotonicMs}, {"session", QVariant::fromValue(m_mqttSession)}};
+  }
+  record["fieldUpdates"] = fieldUpdates;
+  container[key] = record;
+  emit mqttReceptionMetadataChanged();
 }
 
 QVariantMap GameData::robotDynamicStatus() const {

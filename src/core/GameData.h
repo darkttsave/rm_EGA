@@ -700,6 +700,7 @@ Q_PROPERTY(QVariantMap robotRespawnStatus READ robotRespawnStatus NOTIFY robotRe
   Q_PROPERTY(QVariantMap robotModuleStatus READ robotModuleStatus NOTIFY moduleListChanged)
   Q_PROPERTY(QVariantMap robotDynamicStatus READ robotDynamicStatus NOTIFY robotDynamicStatusChanged)
   Q_PROPERTY(QVariantMap gameStatusObservation READ gameStatusObservation NOTIFY gameStatusObservationChanged)
+  Q_PROPERTY(QVariantMap mqttReceptionMetadata READ mqttReceptionMetadata NOTIFY mqttReceptionMetadataChanged)
 
   // Observation of Event 16 only; this is not the current installation state.
   Q_PROPERTY(QVariantMap lastEventObservation READ lastEventObservation NOTIFY lastEventObservationChanged)
@@ -720,6 +721,9 @@ public:
   explicit GameData(QObject *parent = nullptr);
   ~GameData();
 
+  QVariantMap mqttReceptionMetadata() const;
+  void setMqttSessionState(bool connected, const QString &clientId);
+  void recordMqttObservation(const QString &topic, int identity, qint64 receivedMs, qint64 monotonicMs);
   QVariantMap robotModuleStatus() const;
   QVariantMap robotDynamicStatus() const;
   void clearRobotDynamicStatus();
@@ -1390,6 +1394,8 @@ signals:
   void airSupportStatusUpdated();
   void siloStatusChanged();
   void techCoreMotionStateSyncUpdated();
+  void currentRobotIdentityChanged();
+  void mqttReceptionMetadataChanged();
   void gameStatusObservationChanged();
   void lastEventObservationChanged();
   void event16ReceivedChanged();
@@ -1502,6 +1508,12 @@ private:
 
   // 0x0101 场地事件数据缓存
   quint32 m_eventData = 0;
+  bool m_mqttSessionConnected = false;
+  quint64 m_mqttSession = 0;
+  quint64 m_mqttIdentityEpoch = 0;
+  QString m_mqttSessionIdentity;
+  QVariantMap m_mqttTopicMetadata;
+  QVariantMap m_mqttStaticMetadata;
   bool m_gameStatusReceived = false;
   bool m_gameStatusResultContextValid = false;
   QVariantMap m_gameStatusFields;

@@ -424,6 +424,8 @@ private:
 
   // --- MQTT 成员变量 ---
   MqttManager *m_mqttManager = nullptr; ///< MQTT 客户端管理器
+  qint64 m_receiptWallMs = 0;
+  qint64 m_receiptMonotonicMs = 0;
   bool m_hasMqttGameStatus = false; ///< 是否已有 MQTT 比赛全局状态
   robomaster::GameStage m_lastMqttStage =
       robomaster::STAGE_NOT_STARTED; ///< 最近一次 MQTT 比赛阶段

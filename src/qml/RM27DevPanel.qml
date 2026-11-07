@@ -28,6 +28,30 @@ Rectangle {
             spacing: 14
             Text { text: "RM27 开发者状态面板"; color: "white"; font.pixelSize: 28; topPadding: 20 }
             Text { text: "Ctrl+Shift+F10 或 Esc 关闭 · 键鼠机器人控制已禁用 · GameData（部分旧业务尚未适配）"; color: "#a8c4d8"; font.pixelSize: 16 }
+            Text { text: "本机 MQTT 接收与会话"; color: "#8de0ff"; font.pixelSize: 21 }
+            Text {
+                objectName: "rm27MqttSession"
+                property var meta: root.dataSource ? root.dataSource.mqttReceptionMetadata : ({})
+                color: "white"; font.pixelSize: 18; width: parent.width; wrapMode: Text.Wrap
+                text: "MQTT: " + (meta.connected ? "已连接" : "未连接") + "    当前会话: " + (meta.session || 0) +
+                      "    客户端身份: " + (meta.clientId || "未连接") + "    当前机器人: " + (meta.configuredIdentity || "无效") +
+                      "\n时间为本机接收时间；当前会话不代表实时有效。"
+            }
+            Repeater {
+                model: ["GameStatus", "RobotDynamicStatus", "RobotStaticStatus", "RobotModuleStatus", "Event16"]
+                delegate: Text {
+                    required property string modelData
+                    property var meta: { root.revision; return root.dataSource ? root.dataSource.mqttReceptionMetadata : ({}) }
+                    property var record: modelData === "RobotStaticStatus" ? ((meta.staticByRobot || ({}))[String(meta.configuredIdentity)] || ({})) : ((meta.topics || ({}))[modelData] || ({}))
+                    property string state: record.sessionState || "never"
+                    objectName: "rm27Reception_" + modelData
+                    color: "white"; font.pixelSize: 18; width: parent.width; wrapMode: Text.Wrap
+                    text: modelData + ": " + (state === "never" ? "从未收到" :
+                          (state === "current" ? "当前会话观测" : state === "disconnected" ? "断连前历史观测" : state === "identity_changed" ? "旧身份历史观测" : "历史会话观测") +
+                          "    本机接收: " + Qt.formatDateTime(record.receivedAt, "yyyy-MM-dd HH:mm:ss.zzz") +
+                          "    距接收: " + Math.floor(record.ageMs / 1000) + " 秒    会话: " + record.session + (record.identity ? "    机器人 ID: " + record.identity : "（全局或身份未确定）"))
+                }
+            }
             Text { text: "全局比赛状态（官方 GameStatus 观测）"; color: "#8de0ff"; font.pixelSize: 21 }
             Text {
                 objectName: "rm27GameStatusSummary"
@@ -48,6 +72,9 @@ Rectangle {
                     property var snapshot: root.dataSource ? root.dataSource.gameStatusObservation : ({})
                     property var item: snapshot.fields ? snapshot.fields[modelData.key] : undefined
                     property var last: snapshot.accepted ? snapshot.accepted[modelData.key] : undefined
+                    property var receipt: root.dataSource ? ((root.dataSource.mqttReceptionMetadata.topics || ({})).GameStatus || ({})) : ({})
+                    property var lastReceipt: (receipt.fieldUpdates || ({}))[modelData.key]
+                    function lastStamp() { return lastReceipt ? "；本机接收 " + Qt.formatDateTime(lastReceipt.receivedAt, "HH:mm:ss.zzz") + " 会话 " + lastReceipt.session : "；接收来源未确认" }
                     function describe(value) {
                         if (modelData.key === "current_stage") return ["未开始", "准备", "十五秒自检", "五秒倒计时", "比赛中", "比赛结算中"][value] + " (" + value + ")"
                         if (modelData.key === "game_result") return ["平局", "红方胜利", "蓝方胜利"][value] + " (" + value + ")"
@@ -56,7 +83,7 @@ Rectangle {
                     }
                     objectName: "rm27GameStatus_" + modelData.key
                     color: "white"; font.pixelSize: 18; width: parent.width; wrapMode: Text.Wrap; textFormat: Text.RichText
-                    text: modelData.name + ": " + (!item || item.state === "unreported" ? "未上报" + (last === undefined || modelData.key === "game_result" || modelData.key === "end_reason" ? "" : "（上次: " + describe(last) + "&nbsp;&nbsp;&nbsp;&nbsp;<font color='#60D8B7'>valid</font>）") :
+                    text: modelData.name + ": " + (!item || item.state === "unreported" ? "未上报" + (last === undefined || modelData.key === "game_result" || modelData.key === "end_reason" ? "" : "（上次: " + describe(last) + "&nbsp;&nbsp;&nbsp;&nbsp;<font color='#60D8B7'>valid</font>" + lastStamp() + "）") :
                           item.state === "not_applicable" ? "当前阶段不适用（原始值 " + item.value + "）" :
                           item.state === "invalid" ? "非法或未识别（原始值 " + item.value + "）" : describe(item.value) + "&nbsp;&nbsp;&nbsp;&nbsp;<font color='#60D8B7'>valid</font>" + (item.legacyProjection === "out_of_range" ? "（超出旧状态可表示范围）" : ""))
                 }
@@ -131,9 +158,12 @@ Rectangle {
                     property var snapshot: root.dataSource ? root.dataSource.robotDynamicStatus : ({})
                     property var item: snapshot.fields ? snapshot.fields[modelData.key] : undefined
                     property var last: snapshot.accepted ? snapshot.accepted[modelData.key] : undefined
+                    property var receipt: root.dataSource ? ((root.dataSource.mqttReceptionMetadata.topics || ({})).RobotDynamicStatus || ({})) : ({})
+                    property var lastReceipt: (receipt.fieldUpdates || ({}))[modelData.key]
+                    function lastStamp() { return lastReceipt ? "；本机接收 " + Qt.formatDateTime(lastReceipt.receivedAt, "HH:mm:ss.zzz") + " 会话 " + lastReceipt.session : "；接收来源未确认" }
                     objectName: "rm27Dynamic_" + modelData.key
                     color: "white"; font.pixelSize: 18; textFormat: Text.RichText
-                    text: modelData.name + ": " + (!item || item.state === "unreported" ? "未上报" + (last === undefined ? "" : "（上次: " + last + "&nbsp;&nbsp;&nbsp;&nbsp;<font color='#60D8B7'>valid</font>）") :
+                    text: modelData.name + ": " + (!item || item.state === "unreported" ? "未上报" + (last === undefined ? "" : "（上次: " + last + "&nbsp;&nbsp;&nbsp;&nbsp;<font color='#60D8B7'>valid</font>" + lastStamp() + "）") :
                           item.state === "invalid" ? "非法值 " + item.value : item.state === "not_applicable" ? "不适用（协议保留位）" : item.value + "&nbsp;&nbsp;&nbsp;&nbsp;<font color='#60D8B7'>valid</font>" + (item.legacyProjection === "out_of_range" ? "（超出旧状态可表示范围）" : ""))
                 }
             }
@@ -152,10 +182,11 @@ Rectangle {
             Text {
                 objectName: "rm27ModuleSummary"
                 property var snapshot: root.dataSource ? root.dataSource.robotModuleStatus : ({})
+                property var receipt: root.dataSource ? ((root.dataSource.mqttReceptionMetadata.topics || ({})).RobotModuleStatus || ({})) : ({})
                 color: "white"; font.pixelSize: 18; width: parent.width; wrapMode: Text.Wrap
                 text: "模块状态已收到: " + (snapshot.received ? "是（机器人 ID " + snapshot.robotId + "）" : "否") +
-                      "\n42mm 安装权限已确认: " + (snapshot.received && (snapshot.robotId === 1 || snapshot.robotId === 101) && snapshot.modular_42mm !== undefined && snapshot.modular_42mm <= 1 ? "是" : "否") +
-                      "    当前权限值: " + (!snapshot.received || snapshot.modular_42mm === undefined ? "未收到" :
+                      "\n42mm 安装权限本会话已上报: " + (receipt.sessionState === "current" && snapshot.received && (snapshot.robotId === 1 || snapshot.robotId === 101) && snapshot.modular_42mm !== undefined && snapshot.modular_42mm <= 1 ? "是" : "否") +
+                      "    最近权限原值: " + (!snapshot.received || snapshot.modular_42mm === undefined ? "未收到" :
                           snapshot.robotId !== 1 && snapshot.robotId !== 101 ? "不适用（原始值 " + snapshot.modular_42mm + "）" :
                           snapshot.modular_42mm === 0 ? "0（未拥有）" : snapshot.modular_42mm === 1 ? "1（拥有）" : "非法值 " + snapshot.modular_42mm) +
                       "（仅适用于重装；不代表已安装或可射击）"
