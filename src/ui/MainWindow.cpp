@@ -79,6 +79,7 @@
 #include "../widgets/AROverlayWidget.h"
 #endif
 #include "MainWindow.h"
+#include "control/CustomControllerForwarder.h"
 #include <QFontDatabase>
 #include <QQmlContext>
 #include <QQuickItem>
@@ -672,6 +673,13 @@ void MainWindow::initializeCore() {
 
   // 初始化网络管理器
   m_networkManager = new NetworkManager(m_gameData, this);
+
+  if (qEnvironmentVariable("RM_CUSTOM_CONTROLLER_FORWARD") == QLatin1String("1")) {
+    auto *forwarder = new CustomControllerForwarder(m_networkManager, this);
+    connect(forwarder, &CustomControllerForwarder::errorOccurred, this,
+            [](const QString &error) { qWarning() << error; });
+    forwarder->start(qEnvironmentVariable("RM_CUSTOM_CONTROLLER_PORT"), true);
+  }
 
 #ifdef RM_HAS_MQTT
   m_mqttReconnectTimer = new QTimer(this);

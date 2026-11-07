@@ -53,6 +53,20 @@ add_executable(test_protocol unit/test_protocol.cpp)
 target_link_libraries(test_protocol PRIVATE Qt6::Core Qt6::Test RoboMasterClientLib protobuf::libprotobuf)
 rm26_add_qt_test(TestProtocol test_protocol)
 
+# 旧自定义控制器 RoboMaster 串口帧解析测试
+add_executable(test_custom_controller_parser
+    unit/test_custom_controller_parser.cpp)
+target_link_libraries(test_custom_controller_parser PRIVATE
+    Qt6::Core Qt6::Test RoboMasterClientLib)
+rm26_add_qt_test(TestCustomControllerParser test_custom_controller_parser)
+
+if(UNIX AND NOT APPLE AND PAHO_MQTT_FOUND)
+    add_executable(test_custom_controller_mqtt unit/test_custom_controller_mqtt.cpp)
+    target_link_libraries(test_custom_controller_mqtt PRIVATE
+        Qt6::Core Qt6::Network Qt6::Test RoboMasterClientLib util)
+    rm26_add_qt_test(TestCustomControllerMqtt test_custom_controller_mqtt)
+endif()
+
 # 输入快捷键策略测试
 add_executable(test_input_hotkey_policy unit/test_input_hotkey_policy.cpp)
 target_link_libraries(test_input_hotkey_policy PRIVATE Qt6::Core Qt6::Gui Qt6::Test RoboMasterClientLib)

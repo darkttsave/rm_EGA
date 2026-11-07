@@ -189,9 +189,10 @@ bool MqttManager::publish(const QString &topic, const QByteArray &payload,
                           int qos, int waitForCompletionMs) {
   const qint64 publishStartMs = QDateTime::currentMSecsSinceEpoch();
   if (!isConnected()) {
-    qWarning() << "MqttManager: Cannot publish, not connected";
+    if (topic != QLatin1String("CustomControl"))
+      qWarning() << "MqttManager: Cannot publish, not connected";
     const qint64 publishDoneMs = QDateTime::currentMSecsSinceEpoch();
-    qInfo().noquote()
+    if (topic != QLatin1String("CustomControl")) qInfo().noquote()
         << QStringLiteral(
                "RM26_COMMAND_TIMING direction=tx topic=%1 start_ms=%2 "
                "queued_ms=%3 done_ms=%4 publish_call_ms=%5 wait_ms=%6 "
@@ -219,9 +220,10 @@ bool MqttManager::publish(const QString &topic, const QByteArray &payload,
                                      &pubmsg, &token);
   const qint64 publishQueuedMs = QDateTime::currentMSecsSinceEpoch();
   if (rc != MQTTCLIENT_SUCCESS) {
-    qWarning() << "MqttManager: Failed to publish to" << topic << ", rc=" << rc;
+    if (topic != QLatin1String("CustomControl"))
+      qWarning() << "MqttManager: Failed to publish to" << topic << ", rc=" << rc;
     const qint64 publishDoneMs = QDateTime::currentMSecsSinceEpoch();
-    qInfo().noquote()
+    if (topic != QLatin1String("CustomControl")) qInfo().noquote()
         << QStringLiteral(
                "RM26_COMMAND_TIMING direction=tx topic=%1 start_ms=%2 "
                "queued_ms=%3 done_ms=%4 publish_call_ms=%5 wait_ms=%6 "
@@ -266,7 +268,7 @@ bool MqttManager::publish(const QString &topic, const QByteArray &payload,
   }
 
   const qint64 publishDoneMs = QDateTime::currentMSecsSinceEpoch();
-  qInfo().noquote()
+  if (topic != QLatin1String("CustomControl")) qInfo().noquote()
       << QStringLiteral(
              "RM26_COMMAND_TIMING direction=tx topic=%1 start_ms=%2 "
              "queued_ms=%3 done_ms=%4 publish_call_ms=%5 wait_ms=%6 "
@@ -280,7 +282,8 @@ bool MqttManager::publish(const QString &topic, const QByteArray &payload,
              .arg(qos)
              .arg(payload.size());
 
-  MqttLogger::instance()->logTx(topic, payload);
+  if (topic != QLatin1String("CustomControl"))
+    MqttLogger::instance()->logTx(topic, payload);
   return true;
 #else
   Q_UNUSED(topic);

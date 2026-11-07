@@ -34,6 +34,8 @@
 #include "RosRadarBridgeProtocol.h"
 #include <QHostAddress>       // Qt 网络地址类
 #include <QObject>            // Qt 基础对象类
+#include <QElapsedTimer>
+#include <QTimer>
 #include <QUdpSocket>         // Qt UDP 套接字类
 
 #ifdef RM_HAS_MQTT
@@ -185,6 +187,17 @@ public:
    */
   void sendData(const QByteArray &data, const QHostAddress &address,
                 quint16 port);
+
+  struct CustomControlStats {
+    quint64 published = 0;
+    quint64 dropped = 0;
+  };
+
+  // True means accepted by the local MQTT client, not received by the robot.
+  // A rate-limited 10-byte outpost update may be queued and returns false.
+  bool sendCustomControl(const QByteArray &data);
+  CustomControlStats customControlOutpostStats() const { return m_customOutpostStats; }
+  CustomControlStats customControlControllerStats() const { return m_customControllerStats; }
 
   /**
    * @brief 发送 Protobuf 消息
@@ -365,6 +378,7 @@ signals:
    * @param error 失败时的错误描述
    */
   void mqttConnectCompleted(bool success, const QString &error);
+  void mqttConnectionStateChanged(bool connected);
 #endif
 
 private slots:
@@ -379,6 +393,25 @@ private slots:
 
 private:
   // --- 私有成员 ---
+
+  bool publishCustomControl(const QByteArray &data);
+  void flushPendingOutpost();
+  void logCustomControlFailure(const char *reason, bool networkFailure);
+  void resetCustomControlNetworkFailure();
+  struct CustomControlFailureLog {
+    QElapsedTimer clock;
+    quint64 notConnected = 0;
+    quint64 publishFailed = 0;
+    quint64 invalidInput = 0;
+    quint64 serializationFailed = 0;
+  };
+  CustomControlFailureLog m_customControlNetworkFailure;
+  CustomControlFailureLog m_customControlInputFailure;
+  QElapsedTimer m_customControlClock;
+  QTimer m_customOutpostTimer;
+  QByteArray m_pendingOutpost;
+  CustomControlStats m_customOutpostStats;
+  CustomControlStats m_customControllerStats;
 
   QUdpSocket *m_udpSocket; ///< UDP 套接字实例
   GameData *m_gameData;    ///< 比赛数据中心指针（不拥有所有权）

@@ -284,6 +284,9 @@ endforeach()
 set(SOURCES
     resources.qrc
     src/qml/qml.qrc
+    src/control/CustomControllerParser.cpp
+    src/control/CustomControllerSerial.cpp
+    src/control/CustomControllerForwarder.cpp
     src/ui/ExchangeCommandPolicy.cpp
     src/ui/InputHotkeyPolicy.cpp
     src/ui/PopupOverlayPolicy.cpp
@@ -341,6 +344,9 @@ set(SOURCES
 
 # 头文件
 set(HEADERS
+    src/control/CustomControllerParser.h
+    src/control/CustomControllerSerial.h
+    src/control/CustomControllerForwarder.h
     src/ui/LayoutConstants.h
     src/ui/ExchangeCommandPolicy.h
     src/ui/InputHotkeyPolicy.h
@@ -462,6 +468,7 @@ endif()
 target_include_directories(RoboMasterClientLib PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/control
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ui
     ${CMAKE_CURRENT_SOURCE_DIR}/src/widgets
     ${CMAKE_CURRENT_SOURCE_DIR}/src/config

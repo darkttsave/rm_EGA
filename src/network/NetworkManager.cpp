@@ -344,23 +344,9 @@ bool NetworkManager::processRosRadarBridgePayload(const QByteArray &payload) {
 void NetworkManager::sendData(const QByteArray &data,
                               const QHostAddress &address, quint16 port) {
 #ifdef RM_HAS_MQTT
-  if (m_mqttManager && m_mqttManager->isConnected()) {
-    robomaster::CustomControl message;
-    message.set_data(data.constData(), static_cast<size_t>(data.size()));
-
-    const QByteArray payload = serializeMessage(message);
-    if (payload.isEmpty()) {
-      qWarning() << "NetworkManager: Failed to serialize CustomControl payload";
-      return;
-    }
-
-    m_mqttManager->publish(QStringLiteral("CustomControl"), payload, 1);
-    emit dataSent(payload);
-    return;
-  }
   Q_UNUSED(address);
   Q_UNUSED(port);
-  qWarning() << "NetworkManager: MQTT mode enabled but broker not connected, dropping raw payload";
+  sendCustomControl(data);
   return;
 #endif
   // 调用 QUdpSocket 发送数据报
@@ -368,6 +354,120 @@ void NetworkManager::sendData(const QByteArray &data,
 
   // 发送 dataSent 信号，用于调试追踪
   emit dataSent(data);
+}
+
+bool NetworkManager::sendCustomControl(const QByteArray &data) {
+  CustomControlStats *stats = data.size() == 10 ? &m_customOutpostStats
+                              : data.size() == 30 ? &m_customControllerStats
+                                                  : nullptr;
+  if (data.isEmpty() || data.size() > 60) {
+    logCustomControlFailure("invalid_input", false);
+    if (stats) ++stats->dropped;
+    return false;
+  }
+#ifdef RM_HAS_MQTT
+  if (!isMqttConnected()) {
+    logCustomControlFailure("not_connected", true);
+    if (stats) ++stats->dropped;
+    return false;
+  }
+
+  // 14 ms is conservatively below the 75 Hz maximum, using a monotonic clock.
+  constexpr qint64 minIntervalMs = 14;
+  const qint64 elapsed = m_customControlClock.isValid()
+                             ? m_customControlClock.elapsed() : minIntervalMs;
+  if (elapsed < minIntervalMs || !m_pendingOutpost.isEmpty()) {
+    if (data.size() == 10) {
+      if (!m_pendingOutpost.isEmpty()) ++m_customOutpostStats.dropped;
+      m_pendingOutpost = data;
+      if (!m_customOutpostTimer.isActive()) {
+        m_customOutpostTimer.setSingleShot(true);
+        m_customOutpostTimer.setTimerType(Qt::PreciseTimer);
+        connect(&m_customOutpostTimer, &QTimer::timeout, this,
+                &NetworkManager::flushPendingOutpost, Qt::UniqueConnection);
+        m_customOutpostTimer.start(static_cast<int>(qMax<qint64>(1, minIntervalMs - elapsed)));
+      }
+    } else if (stats) {
+      ++stats->dropped;
+    }
+    return false;
+  }
+  return publishCustomControl(data);
+#else
+  if (stats) ++stats->dropped;
+  return false;
+#endif
+}
+
+bool NetworkManager::publishCustomControl(const QByteArray &data) {
+  CustomControlStats *stats = data.size() == 10 ? &m_customOutpostStats
+                              : data.size() == 30 ? &m_customControllerStats
+                                                  : nullptr;
+#ifdef RM_HAS_MQTT
+  robomaster::CustomControl message;
+  message.set_data(data.constData(), static_cast<size_t>(data.size()));
+  const QByteArray payload = serializeMessage(message);
+  // QoS 0 prevents an unacknowledged control packet being replayed after a
+  // reconnect; the return value only indicates local publish acceptance.
+  m_customControlClock.start();
+  bool published = false;
+  if (payload.isEmpty()) {
+    logCustomControlFailure("serialization_failed", false);
+  } else if (!m_mqttManager || !m_mqttManager->isConnected()) {
+    logCustomControlFailure("not_connected", true);
+  } else if (!m_mqttManager->publish(QStringLiteral("CustomControl"), payload, 0, 0)) {
+    logCustomControlFailure("publish_failed", true);
+  } else {
+    published = true;
+    resetCustomControlNetworkFailure();
+  }
+  if (stats) {
+    if (published) ++stats->published;
+    else ++stats->dropped;
+  }
+  if (published && data.size() == 10) emit dataSent(payload);
+  return published;
+#else
+  Q_UNUSED(data);
+  if (stats) ++stats->dropped;
+  return false;
+#endif
+}
+
+void NetworkManager::logCustomControlFailure(const char *reason,
+                                             bool networkFailure) {
+  auto &state = networkFailure ? m_customControlNetworkFailure
+                               : m_customControlInputFailure;
+  const QByteArray category(reason);
+  if (category == "not_connected") ++state.notConnected;
+  else if (category == "publish_failed") ++state.publishFailed;
+  else if (category == "invalid_input") ++state.invalidInput;
+  else if (category == "serialization_failed") ++state.serializationFailed;
+
+  if (!state.clock.isValid() || state.clock.elapsed() >= 5000) {
+    qWarning().noquote()
+        << QStringLiteral("CustomControl %1 failure: not_connected=%2 publish_failed=%3 invalid_input=%4 serialization_failed=%5")
+               .arg(networkFailure ? QStringLiteral("network") : QStringLiteral("input/serialization"))
+               .arg(state.notConnected).arg(state.publishFailed)
+               .arg(state.invalidInput).arg(state.serializationFailed);
+    state.clock.restart();
+  }
+}
+
+void NetworkManager::resetCustomControlNetworkFailure() {
+  if (m_customControlNetworkFailure.clock.isValid()) {
+    qInfo().noquote()
+        << QStringLiteral("CustomControl network recovered: not_connected=%1 publish_failed=%2")
+               .arg(m_customControlNetworkFailure.notConnected)
+               .arg(m_customControlNetworkFailure.publishFailed);
+    m_customControlNetworkFailure = CustomControlFailureLog{};
+  }
+}
+
+void NetworkManager::flushPendingOutpost() {
+  const QByteArray data = m_pendingOutpost;
+  m_pendingOutpost.clear();
+  if (!data.isEmpty()) publishCustomControl(data);
 }
 
 /**
@@ -1083,6 +1183,7 @@ void NetworkManager::startMqtt(const QString &brokerUri,
     connect(
         m_mqttManager, &MqttManager::connectionStateChanged, this,
         [this](bool connected) {
+          emit mqttConnectionStateChanged(connected);
           if (connected) {
             qDebug()
                 << "NetworkManager: MQTT connected, subscribing to topics...";
@@ -1090,6 +1191,9 @@ void NetworkManager::startMqtt(const QString &brokerUri,
             // 启动 MQTT 消息日志会话
             MqttLogger::instance()->startSession();
           } else {
+            m_customOutpostTimer.stop();
+            if (!m_pendingOutpost.isEmpty()) ++m_customOutpostStats.dropped;
+            m_pendingOutpost.clear();
             MqttLogger::instance()->stopSession();
           }
         });
