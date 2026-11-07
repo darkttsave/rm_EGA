@@ -427,6 +427,9 @@ private:
   bool m_hasMqttGameStatus = false; ///< 是否已有 MQTT 比赛全局状态
   robomaster::GameStage m_lastMqttStage =
       robomaster::STAGE_NOT_STARTED; ///< 最近一次 MQTT 比赛阶段
+  bool m_hasMqttStage = false;
+  bool m_hasMqttRemaining = false;
+  bool m_hasMqttPaused = false;
   quint16 m_lastMqttTimeRemaining = 420; ///< 最近一次 MQTT 阶段剩余时间 (秒)
   bool m_lastMqttPaused = false;         ///< 最近一次 MQTT 暂停状态
 #endif

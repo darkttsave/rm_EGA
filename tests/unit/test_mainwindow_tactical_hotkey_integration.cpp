@@ -232,17 +232,29 @@ private slots:
       QTRY_VERIFY(childStackIndex(&window, panel) > childStackIndex(&window, &competingOverlay));
       auto *root = panel->rootObject();
       QVERIFY(root);
-      auto *score = root->findChild<QObject *>(QStringLiteral("rm27Scores"));
-      auto *state = root->findChild<QObject *>(QStringLiteral("rm27GameState"));
+      std::function<QQuickItem *(QQuickItem *, const QString &)> findVisual =
+          [&](QQuickItem *item, const QString &name) -> QQuickItem * {
+            if (item->objectName() == name) return item;
+            for (auto *child : item->childItems()) if (auto *found = findVisual(child, name)) return found;
+            return nullptr;
+          };
+      auto *score = findVisual(root, QStringLiteral("rm27GameStatus_red_score"));
+      auto *blueScore = findVisual(root, QStringLiteral("rm27GameStatus_blue_score"));
+      auto *state = findVisual(root, QStringLiteral("rm27GameStatus_stage_countdown_sec"));
       auto *robot = root->findChild<QObject *>(QStringLiteral("rm27CurrentRobot"));
-      QVERIFY(score); QVERIFY(state); QVERIFY(robot);
+      QVERIFY(score); QVERIFY(blueScore); QVERIFY(state); QVERIFY(robot);
       data->setCurrentRobotId(3);
       data->updateGameStateFromS1(4, 237, 42, 19, 1, true);
+      QVERIFY(state->property("text").toString().contains(QStringLiteral("未上报")));
+      robomaster::GameStatus official;
+      official.set_current_stage(4); official.set_stage_countdown_sec(237);
+      official.set_red_score(42); official.set_blue_score(19); official.set_is_paused(true);
+      data->updateGameStatus(official);
       robomaster::RobotStatus status;
       status.set_id(3); status.set_hp(345); status.set_max_hp(500);
       data->updateRobotData(status);
       QTRY_VERIFY(score->property("text").toString().contains("42"));
-      QVERIFY(score->property("text").toString().contains("19"));
+      QVERIFY(blueScore->property("text").toString().contains("19"));
       QTRY_VERIFY(state->property("text").toString().contains("237"));
       QTRY_VERIFY(robot->property("text").toString().contains("345/500"));
       const bool mapMode = window.tacticalLargeMapMode();

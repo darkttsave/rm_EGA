@@ -83,7 +83,7 @@ enum class RobotStatus {
 /**
  * @enum GameStage
  * @brief 比赛阶段枚举
- * @details 按照 RoboMaster 2026 官方协议定义:
+ * @details 按照 RoboMaster 2027 官方协议定义:
  *          0: 未开始比赛
  *          1: 准备阶段
  *          2: 十五秒裁判系统自检阶段
@@ -699,6 +699,7 @@ Q_PROPERTY(QVariantMap robotRespawnStatus READ robotRespawnStatus NOTIFY robotRe
 
   Q_PROPERTY(QVariantMap robotModuleStatus READ robotModuleStatus NOTIFY moduleListChanged)
   Q_PROPERTY(QVariantMap robotDynamicStatus READ robotDynamicStatus NOTIFY robotDynamicStatusChanged)
+  Q_PROPERTY(QVariantMap gameStatusObservation READ gameStatusObservation NOTIFY gameStatusObservationChanged)
 
   // Observation of Event 16 only; this is not the current installation state.
   Q_PROPERTY(QVariantMap lastEventObservation READ lastEventObservation NOTIFY lastEventObservationChanged)
@@ -722,6 +723,7 @@ public:
   QVariantMap robotModuleStatus() const;
   QVariantMap robotDynamicStatus() const;
   void clearRobotDynamicStatus();
+  QVariantMap gameStatusObservation() const { return {{QStringLiteral("received"), m_gameStatusReceived}, {QStringLiteral("fields"), m_gameStatusFields}, {QStringLiteral("accepted"), m_gameStatusAccepted}, {QStringLiteral("resultContextValid"), m_gameStatusResultContextValid}}; }
   QVariantMap lastEventObservation() const { return m_lastEventObservation; }
   bool event16Received() const { return m_event16LastReceivedAt.isValid(); }
   QDateTime event16LastReceivedAt() const { return m_event16LastReceivedAt; }
@@ -1388,6 +1390,7 @@ signals:
   void airSupportStatusUpdated();
   void siloStatusChanged();
   void techCoreMotionStateSyncUpdated();
+  void gameStatusObservationChanged();
   void lastEventObservationChanged();
   void event16ReceivedChanged();
   void robotDynamicStatusChanged();
@@ -1499,6 +1502,10 @@ private:
 
   // 0x0101 场地事件数据缓存
   quint32 m_eventData = 0;
+  bool m_gameStatusReceived = false;
+  bool m_gameStatusResultContextValid = false;
+  QVariantMap m_gameStatusFields;
+  QVariantMap m_gameStatusAccepted;
   QVariantMap m_lastEventObservation; // Latest raw parsed event, without business interpretation.
   QDateTime m_event16LastReceivedAt; // Local receipt time, not installation state.
   RuneData m_runeData;

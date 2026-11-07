@@ -23,15 +23,18 @@ OfficialMessageHandler::Result OfficialMessageHandler::handle(
     if (!msg.ParseFromArray(payload.data(), payload.size()))
       return Result::ParseFailed;
     if (cacheUpdater)
-      cacheUpdater(msg.current_stage(), static_cast<quint16>(msg.stage_countdown_sec()),
-                   msg.is_paused());
+      cacheUpdater(msg);
     if (logger)
       logger(QStringLiteral("GameStatus current_stage=%1 countdown=%2 paused=%3")
                  .arg(msg.current_stage()).arg(msg.stage_countdown_sec()).arg(msg.is_paused()),
              {{QStringLiteral("current_stage"), static_cast<int>(msg.current_stage())},
               {QStringLiteral("stage_countdown_sec"), static_cast<int>(msg.stage_countdown_sec())},
               {QStringLiteral("stage_elapsed_sec"), static_cast<int>(msg.stage_elapsed_sec())},
-              {QStringLiteral("is_paused"), msg.is_paused()}});
+              {QStringLiteral("is_paused"), msg.is_paused()},
+              {QStringLiteral("has_current_stage"), msg.has_current_stage()},
+              {QStringLiteral("has_stage_countdown_sec"), msg.has_stage_countdown_sec()},
+              {QStringLiteral("has_stage_elapsed_sec"), msg.has_stage_elapsed_sec()},
+              {QStringLiteral("has_is_paused"), msg.has_is_paused()}});
     gameData.updateGameStatus(msg);
     return Result::Parsed;
   }

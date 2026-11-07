@@ -7,6 +7,7 @@
 
 #include "MqttClient.h"
 #include "MqttLogger.h"
+#include "OfficialMessageHandler.h"
 #include <QDateTime>
 #include <QDebug>
 
@@ -92,13 +93,8 @@ void MqttClient::handlePayload(const QString &topic,
     return;
 
   if (topic == QStringLiteral("GameStatus")) {
-    robomaster::GameStatus msg;
-    if (msg.ParseFromArray(payload.constData(), payload.size())) {
-      // 保留 GameStatus 的完整语义，包括 stage_elapsed_sec。
-      qDebug() << "MqttClient: GameStatus received current_stage=" << msg.current_stage()
-           << "countdown_sec=" << msg.stage_countdown_sec()
-           << "elapsed_sec=" << msg.stage_elapsed_sec();
-      m_gameData->updateGameStatus(msg);
+    if (OfficialMessageHandler::handle(topic, payload, *m_gameData) ==
+        OfficialMessageHandler::Result::Parsed) {
       emit messageReceived(topic, payload.size());
       return;
     }
@@ -284,7 +280,7 @@ void MqttClient::handlePayload(const QString &topic,
   {
     robomaster::RoboMasterMessage message;
     if (message.ParseFromArray(payload.constData(), payload.size())) {
-      qDebug() << "MqttClient: Parsed RoboMasterMessage wrapper from topic" << topic.c_str() << ", payload_case=" << message.payload_case();
+      qDebug() << "MqttClient: Parsed RoboMasterMessage wrapper from topic" << topic << ", payload_case=" << message.payload_case();
       m_gameData->processProtocolData(message);
       emit messageReceived(topic, payload.size());
       return;

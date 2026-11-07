@@ -2410,24 +2410,13 @@ void GameData::simulateDartHit(int team, int targetId) {
 
 void GameData::simulateGameTimeElapse(int seconds) {
   if (seconds <= 0) return;
-  // 走完整 updateGameStatus 路径，与 MQTT GameStatus topic 赛事引擎协议完全一致
-  const int newTime =
-      std::max(0, static_cast<int>(m_gameState.gameTime) - seconds);
-  robomaster::GameStatus status;
-  status.set_current_stage(
-      static_cast<uint32_t>(static_cast<int>(m_gameState.gameProgress)));
-  status.set_stage_countdown_sec(newTime);
-  status.set_stage_elapsed_sec(
-      static_cast<int32_t>(m_gameState.stageElapsed) + seconds);
-  status.set_red_score(m_gameState.redScore);
-  status.set_blue_score(m_gameState.blueScore);
-  status.set_current_round(m_gameState.currentRound);
-  status.set_total_rounds(1); // 模拟器默认单局
-  status.set_is_paused(m_gameState.isPaused);
-  qInfo() << "[Simulator] Game time elapse:"
-          << m_gameState.gameTime << "->" << newTime
-          << "( -" << seconds << "s )  via updateGameStatus (MQTT path)";
-  updateGameStatus(status);
+  // Local simulation updates the legacy projection, never the official observation.
+  const int newTime = std::max(0, static_cast<int>(m_gameState.gameTime) - seconds);
+  m_gameState.stageElapsed = static_cast<quint16>(
+      std::min(65535, static_cast<int>(m_gameState.stageElapsed) + seconds));
+  updateGameStateFromS1(static_cast<int>(m_gameState.gameProgress), newTime,
+                        m_gameState.redScore, m_gameState.blueScore,
+                        m_gameState.currentRound, m_gameState.isPaused);
 }
 
 
@@ -2874,15 +2863,67 @@ void GameData::updateGameState(const robomaster::GameInfo &data) {
                                  static_cast<quint8>(data.current_round()),
                                  data.is_paused());
 }
-//MQTT GameStatus更新
-void GameData::updateGameStatus(const robomaster::GameStatus &data){
-    applyOfficialGameStateSnapshot(
-        static_cast<GameStage>(data.current_stage()),
-        static_cast<quint16>(data.stage_countdown_sec()),
-        static_cast<quint16>(data.red_score()),
-        static_cast<quint16>(data.blue_score()),
-        static_cast<quint8>(data.current_round()),
-        data.is_paused());
+// The latest official observation is separate from legacy/simulator projections.
+void GameData::updateGameStatus(const robomaster::GameStatus &data) {
+  QVariantMap fields;
+  const bool hasSettlement = data.has_current_stage() && data.current_stage() == 5;
+  const auto previousRound = m_gameStatusAccepted.value("current_round");
+  if ((data.has_current_stage() && data.current_stage() != 5) ||
+      (data.has_current_round() && data.current_round() > 0 && previousRound.isValid() &&
+       previousRound.toUInt() != data.current_round())) {
+    m_gameStatusAccepted.remove("game_result");
+    m_gameStatusAccepted.remove("end_reason");
+  }
+  auto observe = [&](const char *name, bool present, const QVariant &value, bool valid, bool applicable = true) {
+    QVariantMap item;
+    item["state"] = !present ? QStringLiteral("unreported") : !applicable ? QStringLiteral("not_applicable") :
+                    valid ? QStringLiteral("valid") : QStringLiteral("invalid");
+    if (present) item["value"] = value;
+    fields[QString::fromLatin1(name)] = item;
+    if (present && valid && applicable) m_gameStatusAccepted[QString::fromLatin1(name)] = value;
+  };
+#define OBS(field, valid) observe(#field, data.has_##field(), QVariant::fromValue(data.field()), (valid))
+  OBS(current_round, data.current_round() > 0);
+  OBS(total_rounds, true);
+  OBS(red_score, true); OBS(blue_score, true);
+  OBS(current_stage, data.current_stage() <= 5);
+  OBS(stage_countdown_sec, true); OBS(stage_elapsed_sec, true); OBS(is_paused, true);
+#undef OBS
+  observe("game_result", data.has_game_result(), QVariant::fromValue(data.game_result()), data.game_result() <= 2, hasSettlement);
+  observe("end_reason", data.has_end_reason(), QVariant::fromValue(data.end_reason()), data.end_reason() >= 1 && data.end_reason() <= 7, hasSettlement);
+  auto markRange = [&](const char *name, bool fits) {
+    QVariantMap item = fields.value(QLatin1String(name)).toMap();
+    if (item.value("state") == QLatin1String("valid") && !fits) {
+      item["legacyProjection"] = QStringLiteral("out_of_range");
+      fields[QLatin1String(name)] = item;
+    }
+  };
+  markRange("current_round", data.current_round() <= 255);
+  markRange("red_score", data.red_score() <= 65535);
+  markRange("blue_score", data.blue_score() <= 65535);
+  markRange("stage_countdown_sec", data.stage_countdown_sec() >= 0 && data.stage_countdown_sec() <= 65535);
+  markRange("stage_elapsed_sec", data.stage_elapsed_sec() >= 0 && data.stage_elapsed_sec() <= 65535);
+  m_gameStatusReceived = true;
+  m_gameStatusResultContextValid = hasSettlement;
+  m_gameStatusFields = fields;
+  emit gameStatusObservationChanged();
+
+  const auto stage = data.has_current_stage() && data.current_stage() <= 5
+      ? static_cast<GameStage>(data.current_stage()) : m_gameState.gameProgress;
+  const auto time = data.has_stage_countdown_sec() && data.stage_countdown_sec() >= 0 && data.stage_countdown_sec() <= 65535
+      ? static_cast<quint16>(data.stage_countdown_sec()) : m_gameState.gameTime;
+  const auto red = data.has_red_score() && data.red_score() <= 65535 ? static_cast<quint16>(data.red_score()) : m_gameState.redScore;
+  const auto blue = data.has_blue_score() && data.blue_score() <= 65535 ? static_cast<quint16>(data.blue_score()) : m_gameState.blueScore;
+  const auto round = data.has_current_round() && data.current_round() > 0 && data.current_round() <= 255
+      ? static_cast<quint8>(data.current_round()) : m_gameState.currentRound;
+  const auto paused = data.has_is_paused() ? data.is_paused() : m_gameState.isPaused;
+  if (data.has_stage_elapsed_sec() && data.stage_elapsed_sec() >= 0 && data.stage_elapsed_sec() <= 65535)
+    m_gameState.stageElapsed = static_cast<quint16>(data.stage_elapsed_sec());
+  if ((data.has_current_stage() && data.current_stage() <= 5) ||
+      (data.has_stage_countdown_sec() && data.stage_countdown_sec() >= 0 && data.stage_countdown_sec() <= 65535) ||
+      (data.has_red_score() && data.red_score() <= 65535) || (data.has_blue_score() && data.blue_score() <= 65535) ||
+      (data.has_current_round() && data.current_round() > 0 && data.current_round() <= 255) || data.has_is_paused())
+    applyOfficialGameStateSnapshot(stage, time, red, blue, round, paused);
 }
 
 void GameData::updateGlobalLogisticsStatus(

@@ -395,8 +395,8 @@ private slots:
     QCOMPARE(robot->power, 17); QCOMPARE(robot->currentChassisEnergy, 19);
     QCOMPARE(robot->firerate, 7); QCOMPARE(robot->launchingFrequency, 8);
     QCOMPARE(robot->allowedAmmo17mm, 0); QCOMPARE(robot->allowedAmmo42mm, 0);
-    QTRY_VERIFY(heat->property("text").toString().contains(QStringLiteral("有效 12.75")));
-    QVERIFY(ammo->property("text").toString().contains(QStringLiteral("有效 33")));
+    QTRY_VERIFY(heat->property("text").toString().contains(QStringLiteral("12.75&nbsp;&nbsp;&nbsp;&nbsp;<font color='#60D8B7'>valid</font>")));
+    QVERIFY(ammo->property("text").toString().contains(QStringLiteral("33&nbsp;&nbsp;&nbsp;&nbsp;<font color='#60D8B7'>valid</font>")));
     QVERIFY(reserve->property("text").toString().contains(QStringLiteral("不适用")));
     msg.Clear(); msg.set_current_health(0); msg.set_current_heat(0); msg.set_remaining_ammo(0); msg.set_can_remote_ammo(false);
     QCOMPARE(OfficialMessageHandler::handle("RobotDynamicStatus", bytes(msg), data), OfficialMessageHandler::Result::Parsed);
@@ -498,14 +498,93 @@ private slots:
       QCOMPARE(OfficialMessageHandler::handle(topic, invalid, data, logger), OfficialMessageHandler::Result::ParseFailed);
     QCOMPARE(data.redBaseHealth(), 3210); QCOMPARE(data.getRobotById(3)->currentHP, 345); QCOMPARE(logs, 3);
   }
+  void gameStatusPresenceAndPanel() {
+    Q_INIT_RESOURCE(qml);
+    GameData data;
+    QQuickWidget panel;
+    panel.rootContext()->setContextProperty("gameData", &data);
+    panel.setSource(QUrl(QStringLiteral("qrc:/qml/RM27DevPanel.qml")));
+    QCOMPARE(panel.status(), QQuickWidget::Ready);
+    auto field = [&](const char *key) { return data.gameStatusObservation().value("fields").toMap().value(QLatin1String(key)).toMap(); };
+    auto accepted = [&]() { return data.gameStatusObservation().value("accepted").toMap(); };
+    std::function<QQuickItem *(QQuickItem *, const QString &)> findVisual =
+        [&](QQuickItem *item, const QString &name) -> QQuickItem * {
+          if (item->objectName() == name) return item;
+          for (auto *child : item->childItems()) if (auto *found = findVisual(child, name)) return found;
+          return nullptr;
+        };
+    auto display = [&](const char *key) { return findVisual(panel.rootObject(), QString("rm27GameStatus_") + key); };
+    data.simulateGameTimeElapse(3);
+    QVERIFY(!data.gameStatusObservation().value("received").toBool());
+    QVERIFY(display("stage_countdown_sec"));
+    QVERIFY(display("stage_countdown_sec")->property("text").toString().contains(QStringLiteral("未上报")));
+    QVERIFY(!display("stage_countdown_sec")->property("text").toString().contains("420"));
+    robomaster::GameStatus msg;
+    msg.set_current_round(1); msg.set_total_rounds(3); msg.set_red_score(0); msg.set_blue_score(2);
+    msg.set_current_stage(4); msg.set_stage_countdown_sec(299); msg.set_stage_elapsed_sec(1); msg.set_is_paused(false);
+    msg.set_game_result(255); msg.set_end_reason(255);
+    QCOMPARE(OfficialMessageHandler::handle("GameStatus", bytes(msg), data), OfficialMessageHandler::Result::Parsed);
+    QCOMPARE(field("red_score").value("state").toString(), QString("valid"));
+    QCOMPARE(field("red_score").value("value").toUInt(), 0u);
+    QCOMPARE(field("is_paused").value("value").toBool(), false);
+    QCOMPARE(field("game_result").value("state").toString(), QString("not_applicable"));
+    QVERIFY(!accepted().contains("game_result"));
+    QCOMPARE(data.getGameTime(), 299);
+    robomaster::GameStatus partial; partial.set_blue_score(5); partial.set_is_paused(true);
+    QCOMPARE(OfficialMessageHandler::handle("GameStatus", bytes(partial), data), OfficialMessageHandler::Result::Parsed);
+    QCOMPARE(field("red_score").value("state").toString(), QString("unreported"));
+    QCOMPARE(accepted().value("red_score").toUInt(), 0u);
+    QCOMPARE(data.getGameTime(), 299); QCOMPARE(data.blueScore(), 5); QVERIFY(data.is_paused());
+    for (unsigned stage = 0; stage <= 5; ++stage) {
+      robomaster::GameStatus m; m.set_current_stage(stage);
+      QCOMPARE(OfficialMessageHandler::handle("GameStatus", bytes(m), data), OfficialMessageHandler::Result::Parsed);
+      QCOMPARE(field("current_stage").value("state").toString(), QString("valid"));
+      QCOMPARE(static_cast<int>(data.getCurrentStage()), static_cast<int>(stage));
+      QVERIFY(display("current_stage")->property("text").toString().contains(QString::number(stage)));
+    }
+    for (unsigned reason = 1; reason <= 7; ++reason) {
+      robomaster::GameStatus m; m.set_current_stage(5); m.set_game_result(reason % 3); m.set_end_reason(reason);
+      QCOMPARE(OfficialMessageHandler::handle("GameStatus", bytes(m), data), OfficialMessageHandler::Result::Parsed);
+      QCOMPARE(field("game_result").value("state").toString(), QString("valid"));
+      QVERIFY(data.gameStatusObservation().value("resultContextValid").toBool());
+      QCOMPARE(field("end_reason").value("state").toString(), QString("valid"));
+      QCOMPARE(accepted().value("end_reason").toUInt(), reason);
+      QVERIFY(display("end_reason")->property("text").toString().contains(QString::number(reason)));
+    }
+    robomaster::GameStatus invalid; invalid.set_current_stage(77); invalid.set_game_result(1); invalid.set_end_reason(1);
+    invalid.set_current_round(0); invalid.set_red_score(70000);
+    invalid.set_stage_countdown_sec(std::numeric_limits<qint32>::min());
+    invalid.set_stage_elapsed_sec(std::numeric_limits<qint32>::max());
+    QCOMPARE(OfficialMessageHandler::handle("GameStatus", bytes(invalid), data), OfficialMessageHandler::Result::Parsed);
+    QCOMPARE(field("current_stage").value("state").toString(), QString("invalid"));
+    QCOMPARE(field("game_result").value("state").toString(), QString("not_applicable"));
+    QCOMPARE(field("current_round").value("state").toString(), QString("invalid"));
+    QCOMPARE(field("red_score").value("legacyProjection").toString(), QString("out_of_range"));
+    QCOMPARE(accepted().value("stage_countdown_sec").toInt(), std::numeric_limits<qint32>::min());
+    QCOMPARE(accepted().value("stage_elapsed_sec").toInt(), std::numeric_limits<qint32>::max());
+    QCOMPARE(data.getGameTime(), 299); QCOMPARE(data.redScore(), 0);
+    QVERIFY(!accepted().contains("game_result"));
+    robomaster::GameStatus badResult; badResult.set_current_stage(5); badResult.set_game_result(255); badResult.set_end_reason(0);
+    OfficialMessageHandler::handle("GameStatus", bytes(badResult), data);
+    QCOMPARE(field("game_result").value("state").toString(), QString("invalid"));
+    QCOMPARE(field("end_reason").value("state").toString(), QString("invalid"));
+    robomaster::GameStatus unknownStage; unknownStage.set_game_result(1); unknownStage.set_end_reason(7);
+    OfficialMessageHandler::handle("GameStatus", bytes(unknownStage), data);
+    QCOMPARE(field("game_result").value("state").toString(), QString("not_applicable"));
+    QVERIFY(!data.gameStatusObservation().value("resultContextValid").toBool());
+    QVERIFY(!accepted().contains("game_result"));
+    const auto before = data.gameStatusObservation();
+    QCOMPARE(OfficialMessageHandler::handle("GameStatus", QByteArray::fromHex("0880"), data), OfficialMessageHandler::Result::ParseFailed);
+    QCOMPARE(data.gameStatusObservation(), before);
+  }
   void gameStatusCacheAndOrdering() {
     GameData data;
     bool hasCache = false, paused = false;
     quint32 stage = 0;
     quint16 remaining = 0;
     int logs = 0;
-    auto cache = [&](quint32 s, quint16 time, bool p) {
-      hasCache = true; stage = s; remaining = time; paused = p;
+    auto cache = [&](const robomaster::GameStatus &status) {
+      hasCache = true; stage = status.current_stage(); remaining = status.stage_countdown_sec(); paused = status.is_paused();
       QCOMPARE(data.getGameTime(), 420);
     };
     auto logger = [&](const QString &detail, const QJsonObject &fields) {
@@ -540,6 +619,24 @@ private slots:
     QCOMPARE(signal.count(), 0); QCOMPARE(popup.count(), 0);
     QCOMPARE(received.count(), 2);
   }
+  void networkGameStatusPartialCache() {
+    GameData data;
+    RM::NetworkManager network(&data);
+    robomaster::GameStatus initial; initial.set_current_stage(4); initial.set_stage_countdown_sec(250); initial.set_is_paused(true);
+    network.processMqttMessage("GameStatus", bytes(initial));
+    robomaster::GameStatus partial; partial.set_red_score(7);
+    network.processMqttMessage("GameStatus", bytes(partial));
+    QCOMPARE(network.m_lastMqttStage, robomaster::STAGE_BATTLE);
+    QCOMPARE(network.m_lastMqttTimeRemaining, quint16(250)); QVERIFY(network.m_lastMqttPaused);
+    partial.Clear(); partial.set_current_stage(99); partial.set_stage_countdown_sec(-1);
+    network.processMqttMessage("GameStatus", bytes(partial));
+    QCOMPARE(network.m_lastMqttStage, robomaster::STAGE_BATTLE);
+    QCOMPARE(network.m_lastMqttTimeRemaining, quint16(250));
+    partial.Clear(); partial.set_current_stage(0); partial.set_stage_countdown_sec(0); partial.set_is_paused(false);
+    network.processMqttMessage("GameStatus", bytes(partial));
+    QCOMPARE(network.m_lastMqttStage, robomaster::STAGE_NOT_STARTED);
+    QCOMPARE(network.m_lastMqttTimeRemaining, quint16(0)); QVERIFY(!network.m_lastMqttPaused);
+  }
   void networkCacheLogisticsAndUdpPriority() {
     GameData data;
     data.setCurrentRobotId(1);
@@ -558,7 +655,7 @@ private slots:
     QCOMPARE(static_cast<int>(data.getCurrentStage()), 1);
     QVERIFY(data.is_paused());
     network.processMqttMessage("GlobalLogisticsStatus", bytes(logistics));
-    QCOMPARE(data.getGameTime(), 420); // Existing cache default before first GameStatus.
+    QCOMPARE(data.getGameTime(), 100); // Logistics must not manufacture a GameStatus.
     QCOMPARE(data.redEconomy(), 123);
     robomaster::GameStatus status;
     status.set_current_stage(4); status.set_stage_countdown_sec(250);
@@ -740,6 +837,18 @@ private slots:
       QCOMPARE(data.lastEventObservation().value("param").toString(), QStringLiteral("2"));
     }
     QCOMPARE(popups.count(), 0); QCOMPARE(legacyAir.count(), 0); QCOMPARE(legacyMessages.count(), 0);
+    QSignalSpy gameStatusChanged(&data, &GameData::gameStatusObservationChanged);
+    robomaster::GameStatus game; game.set_current_stage(4); game.set_stage_countdown_sec(240);
+    game.set_red_score(7); game.set_blue_score(3); game.set_is_paused(false); game.set_game_result(255);
+    QVERIFY(publisher.publish(QStringLiteral("GameStatus"), bytes(game), 1));
+    QTRY_COMPARE_WITH_TIMEOUT(gameStatusChanged.count(), 1, 5000);
+    QCOMPARE(data.getGameTime(), 240); QCOMPARE(data.redScore(), 7);
+    QCOMPARE(data.gameStatusObservation().value("fields").toMap().value("game_result").toMap().value("state").toString(), QString("not_applicable"));
+    game.Clear(); game.set_current_stage(5); game.set_game_result(1); game.set_end_reason(2);
+    QVERIFY(publisher.publish(QStringLiteral("GameStatus"), bytes(game), 1));
+    QTRY_COMPARE_WITH_TIMEOUT(gameStatusChanged.count(), 2, 5000);
+    QCOMPARE(data.gameStatusObservation().value("accepted").toMap().value("end_reason").toUInt(), 2u);
+    QCOMPARE(data.getGameTime(), 240); QCOMPARE(data.blueScore(), 3);
     robomaster::Event kill;
     kill.set_event_id(1);
     kill.set_param("1,101");

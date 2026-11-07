@@ -7,13 +7,14 @@
 #include <functional>
 
 class GameData;
+namespace robomaster { class GameStatus; }
 
 namespace RM {
 
 class OfficialMessageHandler {
 public:
   enum class Result { Unsupported, Parsed, ParseFailed };
-  using GameStatusCacheUpdater = std::function<void(quint32, quint16, bool)>;
+  using GameStatusCacheUpdater = std::function<void(const robomaster::GameStatus &)>;
   using ParsedLogger = std::function<void(const QString &, const QJsonObject &)>;
 
   // The optional logger runs before GameData is updated, as in NetworkManager.

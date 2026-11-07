@@ -6934,17 +6934,7 @@ void MainWindow::keyPressEvent(QKeyEvent *event) {
                              : (m_gameData->getCurrentRobotId() < 100);
       const int enemyTeam = myIsRed ? 2 : 1;
       // 1. 确保 BATTLE 阶段 (stage=4, 300s remaining)
-      m_gameData->simulateGameTimeElapse(0); // 空操作，用于走通 GameStatus 路径
-      robomaster::GameStatus status;
-      status.set_current_stage(4);            // BATTLE
-      status.set_stage_countdown_sec(300);
-      status.set_stage_elapsed_sec(120);
-      status.set_red_score(0);
-      status.set_blue_score(0);
-      status.set_current_round(1);
-      status.set_total_rounds(1);
-      status.set_is_paused(false);
-      m_gameData->updateGameStatus(status);
+      m_gameData->updateGameStateFromS1(4, 300, 0, 0, 1, false);
       // 2. 进入战术模式
       applyTacticalMode(true);
       // 3. 触发敌方飞镖命中(前哨站, 5s 遮挡) — 敌方队伍命中我方目标

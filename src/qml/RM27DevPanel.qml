@@ -28,17 +28,38 @@ Rectangle {
             spacing: 14
             Text { text: "RM27 开发者状态面板"; color: "white"; font.pixelSize: 28; topPadding: 20 }
             Text { text: "Ctrl+Shift+F10 或 Esc 关闭 · 键鼠机器人控制已禁用 · GameData（部分旧业务尚未适配）"; color: "#a8c4d8"; font.pixelSize: 16 }
+            Text { text: "全局比赛状态（官方 GameStatus 观测）"; color: "#8de0ff"; font.pixelSize: 21 }
             Text {
-                objectName: "rm27GameState"
-                color: "white"; font.pixelSize: 20
-                width: parent.width; wrapMode: Text.Wrap
-                text: !root.dataSource ? "" : "阶段: " + gameData.gamePhase + "    剩余: " + gameData.remainingTime + " 秒    暂停: " + (gameData.is_paused ? "是" : "否") + "    局数: " + gameData.currentRound
+                objectName: "rm27GameStatusSummary"
+                property var snapshot: root.dataSource ? root.dataSource.gameStatusObservation : ({})
+                text: "比赛状态消息已收到: " + (snapshot.received ? "是" : "否")
+                color: "white"; font.pixelSize: 18
             }
-            Text {
-                objectName: "rm27Scores"
-                color: "white"; font.pixelSize: 20
-                width: parent.width; wrapMode: Text.Wrap
-                text: !root.dataSource ? "" : "得分  红: " + gameData.redScore + "    蓝: " + gameData.blueScore + "    当前机器人 ID: " + gameData.currentRobotId
+            Repeater {
+                model: [
+                    {key:"current_round", name:"当前局号"}, {key:"total_rounds", name:"总局数"},
+                    {key:"red_score", name:"红方得分"}, {key:"blue_score", name:"蓝方得分"},
+                    {key:"current_stage", name:"比赛阶段"}, {key:"stage_countdown_sec", name:"阶段剩余时间（秒）"},
+                    {key:"stage_elapsed_sec", name:"阶段已过时间（秒）"}, {key:"is_paused", name:"暂停"},
+                    {key:"game_result", name:"当局结果"}, {key:"end_reason", name:"结束原因"}
+                ]
+                delegate: Text {
+                    required property var modelData
+                    property var snapshot: root.dataSource ? root.dataSource.gameStatusObservation : ({})
+                    property var item: snapshot.fields ? snapshot.fields[modelData.key] : undefined
+                    property var last: snapshot.accepted ? snapshot.accepted[modelData.key] : undefined
+                    function describe(value) {
+                        if (modelData.key === "current_stage") return ["未开始", "准备", "十五秒自检", "五秒倒计时", "比赛中", "比赛结算中"][value] + " (" + value + ")"
+                        if (modelData.key === "game_result") return ["平局", "红方胜利", "蓝方胜利"][value] + " (" + value + ")"
+                        if (modelData.key === "end_reason") return ["", "基地被摧毁", "控制度", "全队总攻击伤害", "全队机器人总剩余血量", "平局", "异常终止", "主裁判手动判定胜负"][value] + " (" + value + ")"
+                        return String(value)
+                    }
+                    objectName: "rm27GameStatus_" + modelData.key
+                    color: "white"; font.pixelSize: 18; width: parent.width; wrapMode: Text.Wrap; textFormat: Text.RichText
+                    text: modelData.name + ": " + (!item || item.state === "unreported" ? "未上报" + (last === undefined || modelData.key === "game_result" || modelData.key === "end_reason" ? "" : "（上次: " + describe(last) + "&nbsp;&nbsp;&nbsp;&nbsp;<font color='#60D8B7'>valid</font>）") :
+                          item.state === "not_applicable" ? "当前阶段不适用（原始值 " + item.value + "）" :
+                          item.state === "invalid" ? "非法或未识别（原始值 " + item.value + "）" : describe(item.value) + "&nbsp;&nbsp;&nbsp;&nbsp;<font color='#60D8B7'>valid</font>" + (item.legacyProjection === "out_of_range" ? "（超出旧状态可表示范围）" : ""))
+                }
             }
             Text {
                 objectName: "rm27Bases"
@@ -111,9 +132,9 @@ Rectangle {
                     property var item: snapshot.fields ? snapshot.fields[modelData.key] : undefined
                     property var last: snapshot.accepted ? snapshot.accepted[modelData.key] : undefined
                     objectName: "rm27Dynamic_" + modelData.key
-                    color: "white"; font.pixelSize: 18
-                    text: modelData.name + ": " + (!item || item.state === "unreported" ? "未上报" + (last === undefined ? "" : "（上次有效: " + last + "）") :
-                          item.state === "invalid" ? "非法值 " + item.value : item.state === "not_applicable" ? "不适用（协议保留位）" : "有效 " + item.value + (item.legacyProjection === "out_of_range" ? "（超出旧状态可表示范围）" : ""))
+                    color: "white"; font.pixelSize: 18; textFormat: Text.RichText
+                    text: modelData.name + ": " + (!item || item.state === "unreported" ? "未上报" + (last === undefined ? "" : "（上次: " + last + "&nbsp;&nbsp;&nbsp;&nbsp;<font color='#60D8B7'>valid</font>）") :
+                          item.state === "invalid" ? "非法值 " + item.value : item.state === "not_applicable" ? "不适用（协议保留位）" : item.value + "&nbsp;&nbsp;&nbsp;&nbsp;<font color='#60D8B7'>valid</font>" + (item.legacyProjection === "out_of_range" ? "（超出旧状态可表示范围）" : ""))
                 }
             }
             Text { text: "机器人状态（实际 GameData 值）"; color: "#8de0ff"; font.pixelSize: 21; topPadding: 10 }

@@ -1079,9 +1079,9 @@ void NetworkManager::processData(const QByteArray &data) {
         if (m_hasMqttGameStatus) {
           // MQTT GameStatus 存在时以 MQTT 为准，否则允许 UDP 兜底
           // 自己驱动阶段/计时变化。
-          gameInfo->set_stage(m_lastMqttStage);
-          gameInfo->set_time_remaining(m_lastMqttTimeRemaining);
-          gameInfo->set_is_paused(m_lastMqttPaused);
+          if (m_hasMqttStage) gameInfo->set_stage(m_lastMqttStage);
+          if (m_hasMqttRemaining) gameInfo->set_time_remaining(m_lastMqttTimeRemaining);
+          if (m_hasMqttPaused) gameInfo->set_is_paused(m_lastMqttPaused);
         }
 #endif
       }
@@ -1242,11 +1242,20 @@ void NetworkManager::processMqttMessage(const QString &topic,
         dumpMqttEvent(QStringLiteral("parsed"), topic, payload, m_gameData,
                       detail, fields);
       },
-      [&](quint32 stage, quint16 remaining, bool paused) {
+      [&](const robomaster::GameStatus &status) {
         m_hasMqttGameStatus = true;
-        m_lastMqttStage = static_cast<robomaster::GameStage>(stage);
-        m_lastMqttTimeRemaining = remaining;
-        m_lastMqttPaused = paused;
+        if (status.has_current_stage() && status.current_stage() <= 5) {
+          m_hasMqttStage = true;
+          m_lastMqttStage = static_cast<robomaster::GameStage>(status.current_stage());
+        }
+        if (status.has_stage_countdown_sec() && status.stage_countdown_sec() >= 0 && status.stage_countdown_sec() <= 65535) {
+          m_hasMqttRemaining = true;
+          m_lastMqttTimeRemaining = static_cast<quint16>(status.stage_countdown_sec());
+        }
+        if (status.has_is_paused()) {
+          m_hasMqttPaused = true;
+          m_lastMqttPaused = status.is_paused();
+        }
       });
 
   if (topic == QLatin1String("RobotModuleStatus") && officialResult == OfficialMessageHandler::Result::ParseFailed) {
@@ -1274,9 +1283,9 @@ void NetworkManager::processMqttMessage(const QString &topic,
                        static_cast<int>(msg.encryption_level())}});
             robomaster::GameInfo gameInfo;
       const bool isBluePerspective = m_gameData->getMyRobotId() >= 100;
-      gameInfo.set_stage(m_lastMqttStage);
-      gameInfo.set_time_remaining(m_lastMqttTimeRemaining);
-      gameInfo.set_is_paused(m_lastMqttPaused);
+      gameInfo.set_stage(static_cast<robomaster::GameStage>(m_gameData->getCurrentStage()));
+      gameInfo.set_time_remaining(m_gameData->getGameTime());
+      gameInfo.set_is_paused(m_gameData->is_paused());
       gameInfo.set_current_round(static_cast<uint32_t>(m_gameData->currentRound()));
       gameInfo.set_red_score(static_cast<uint32_t>(m_gameData->redScore()));
       gameInfo.set_blue_score(static_cast<uint32_t>(m_gameData->blueScore()));
