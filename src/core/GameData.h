@@ -271,7 +271,7 @@ struct RobotData {
 
 
   // 热量相关
-  quint16 currentHeat;        // 当前枪口热量
+  float currentHeat;          // 当前枪口热量，动态协议为 float
   quint16 heatLimit;          // 枪口热量上限
   float coolingValue;         // 枪口热量冷却值（协议为 float）
   bool isHeatOverLimit;     // 新增：热量超限标记 (用于驱动UI变红)
@@ -698,6 +698,7 @@ Q_PROPERTY(QVariantMap robotRespawnStatus READ robotRespawnStatus NOTIFY robotRe
 
 
   Q_PROPERTY(QVariantMap robotModuleStatus READ robotModuleStatus NOTIFY moduleListChanged)
+  Q_PROPERTY(QVariantMap robotDynamicStatus READ robotDynamicStatus NOTIFY robotDynamicStatusChanged)
 
   // Observation of Event 16 only; this is not the current installation state.
   Q_PROPERTY(bool event16Received READ event16Received NOTIFY event16ReceivedChanged)
@@ -718,6 +719,8 @@ public:
   ~GameData();
 
   QVariantMap robotModuleStatus() const;
+  QVariantMap robotDynamicStatus() const;
+  void clearRobotDynamicStatus();
   bool event16Received() const { return m_event16LastReceivedAt.isValid(); }
   QDateTime event16LastReceivedAt() const { return m_event16LastReceivedAt; }
 
@@ -1384,6 +1387,7 @@ signals:
   void siloStatusChanged();
   void techCoreMotionStateSyncUpdated();
   void event16ReceivedChanged();
+  void robotDynamicStatusChanged();
   void baseHealthUpdatedProxy(); // 用于 QML 的无参数信号
   void activePopupsChanged();    // 激活弹窗列表变化
   void outpostHealthUpdatedProxy();
@@ -1424,6 +1428,9 @@ private:
   SentryStatusData m_blueSentry;
   SentryPathData m_allySentryPath;      //己方哨兵路径规划
   QList<ModuleStatusData> m_moduleStatus;//用于顺序存储~按键所需的模块
+  QVariantMap m_dynamicObservation;
+  QVariantMap m_dynamicAccepted;
+  bool m_dynamicReceived = false;
   QVariantMap m_robotModuleStatusMap; // 当前身份的最近一次模块状态及字段 presence
   bool m_robotModuleStatusReceived = false;
   QMap<QString, bool> m_lastModuleOnlineStates; // 模块上次在线态，用于离线消息去重

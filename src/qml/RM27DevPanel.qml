@@ -81,6 +81,34 @@ Rectangle {
                       "    最大底盘能量: " + numberValue("max_chassis_energy", 0) +
                       "\n缺失或非法字段不会覆盖上次有效值；上报值不代表安装状态。"
             }
+            Text { text: "当前机器人动态状态（官方消息观测）"; color: "#8de0ff"; font.pixelSize: 21; topPadding: 10 }
+            Text {
+                objectName: "rm27DynamicSummary"
+                property var snapshot: root.dataSource ? root.dataSource.robotDynamicStatus : ({})
+                color: "white"; font.pixelSize: 18
+                text: "动态消息已收到: " + (snapshot.received ? "是（机器人 ID " + snapshot.robotId + "，按终端关联）" : "否")
+            }
+            Repeater {
+                model: [
+                    {key:"current_health", name:"当前血量"}, {key:"current_heat", name:"当前热量"},
+                    {key:"last_projectile_fire_rate", name:"上一发弹丸射速（m/s）"}, {key:"reserved", name:"保留字段"},
+                    {key:"current_buffer_energy", name:"当前缓冲能量"}, {key:"current_experience", name:"当前经验"},
+                    {key:"experience_for_upgrade", name:"距离升级经验"}, {key:"total_projectiles_fired", name:"累计已发弹量"},
+                    {key:"remaining_ammo", name:"剩余允许发弹量（原始值）"}, {key:"is_out_of_combat", name:"脱战状态"},
+                    {key:"out_of_combat_countdown", name:"脱战倒计时"}, {key:"can_remote_heal", name:"远程补血资格"},
+                    {key:"can_remote_ammo", name:"远程补弹资格"}
+                ]
+                delegate: Text {
+                    required property var modelData
+                    property var snapshot: root.dataSource ? root.dataSource.robotDynamicStatus : ({})
+                    property var item: snapshot.fields ? snapshot.fields[modelData.key] : undefined
+                    property var last: snapshot.accepted ? snapshot.accepted[modelData.key] : undefined
+                    objectName: "rm27Dynamic_" + modelData.key
+                    color: "white"; font.pixelSize: 18
+                    text: modelData.name + ": " + (!item || item.state === "unreported" ? "未上报" + (last === undefined ? "" : "（上次有效: " + last + "）") :
+                          item.state === "invalid" ? "非法值 " + item.value : item.state === "not_applicable" ? "不适用（协议保留位）" : "有效 " + item.value + (item.legacyProjection === "out_of_range" ? "（超出旧状态可表示范围）" : ""))
+                }
+            }
             Text { text: "机器人状态（实际 GameData 值）"; color: "#8de0ff"; font.pixelSize: 21; topPadding: 10 }
             Repeater {
                 model: [1, 3, 4, 5, 6, 7, 8, 9, 101, 103, 104, 105, 106, 107, 108, 109]

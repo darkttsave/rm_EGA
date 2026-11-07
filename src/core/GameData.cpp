@@ -613,6 +613,7 @@ void GameData::setCurrentRobotId(qint64 robotId) {
   const auto previous = RM::resolveRobotIdentity(m_currentRobotId);
   if (m_currentRobotId == next) return;
   m_currentRobotId = next;
+  clearRobotDynamicStatus();
   m_robotModuleStatusMap.clear();
   m_robotModuleStatusReceived = false;
   m_moduleStatus.clear();
@@ -2011,72 +2012,102 @@ void GameData::updateRobotStaticStatus(const robomaster::RobotStaticStatus &data
 }
 }
 
-void GameData::updateRobotDynamicStatus(const robomaster::RobotDynamicStatus &data) {
-  //默认时当前机器人
-  int robotId = m_currentRobotId;
-  RobotData *robot = findRobotById(robotId);
-  if (!robot) {
-    return;
-  }
+QVariantMap GameData::robotDynamicStatus() const {
+  return {{QStringLiteral("received"), m_dynamicReceived},
+          {QStringLiteral("robotId"), m_dynamicReceived ? m_currentRobotId : 0},
+          {QStringLiteral("fields"), m_dynamicObservation},
+          {QStringLiteral("accepted"), m_dynamicAccepted}};
+}
 
-  robot->shootSpeedLimit = robotShootSpeedLimit(robot->type);
-  robot->tabShootSpeedLimit = robotTabShootSpeedLimit(robot->type);
-  robot->isClientConnected = true;
-  robot->currentHP = static_cast<quint16>(data.current_health());
-  robot->currentRoundMaxHP = qMax(robot->currentRoundMaxHP, robot->currentHP);
-  {
+void GameData::clearRobotDynamicStatus() {
+  if (!m_dynamicReceived && m_dynamicObservation.isEmpty() && m_dynamicAccepted.isEmpty()) return;
+  m_dynamicReceived = false;
+  m_dynamicObservation.clear();
+  m_dynamicAccepted.clear();
+  emit robotDynamicStatusChanged();
+}
+
+void GameData::updateRobotDynamicStatus(const robomaster::RobotDynamicStatus &data) {
+  const auto identity = RM::resolveRobotIdentity(m_currentRobotId);
+  if (identity.kind != RM::IdentityKind::Robot || !identity.team) return;
+  RobotData *robot = findRobotById(m_currentRobotId);
+  if (!robot) return;
+
+  QVariantMap fields;
+  auto observe = [&](const char *name, bool present, const QVariant &value, bool valid = true) {
+    QVariantMap item;
+    item["state"] = !present ? QStringLiteral("unreported") : valid ? QStringLiteral("valid") : QStringLiteral("invalid");
+    if (present) item["value"] = value;
+    fields[QString::fromLatin1(name)] = item;
+    if (present && valid) m_dynamicAccepted[QString::fromLatin1(name)] = value;
+  };
+#define OBS_UINT(field) observe(#field, data.has_##field(), QVariant::fromValue(data.field()))
+#define OBS_FLOAT(field) observe(#field, data.has_##field(), data.field(), std::isfinite(data.field()) && data.field() >= 0)
+  OBS_UINT(current_health); OBS_FLOAT(current_heat); OBS_FLOAT(last_projectile_fire_rate);
+  QVariantMap reservedField{{"state", QStringLiteral("not_applicable")}};
+  if (data.has_reserved()) reservedField["value"] = data.reserved();
+  fields["reserved"] = reservedField;
+  OBS_UINT(current_buffer_energy); OBS_UINT(current_experience); OBS_UINT(experience_for_upgrade);
+  OBS_UINT(total_projectiles_fired); OBS_UINT(remaining_ammo); OBS_UINT(is_out_of_combat);
+  OBS_UINT(out_of_combat_countdown); OBS_UINT(can_remote_heal); OBS_UINT(can_remote_ammo);
+#undef OBS_UINT
+#undef OBS_FLOAT
+  auto markLegacyRange = [&](const char *name, bool representable) {
+    auto item = fields.value(QString::fromLatin1(name)).toMap();
+    if (item.value("state") == QStringLiteral("valid") && !representable) {
+      item["legacyProjection"] = QStringLiteral("out_of_range");
+      fields[QString::fromLatin1(name)] = item;
+    }
+  };
+  markLegacyRange("current_health", data.current_health() <= 65535);
+  markLegacyRange("current_heat", data.current_heat() <= 65535);
+  markLegacyRange("current_buffer_energy", data.current_buffer_energy() <= 65535);
+  markLegacyRange("current_experience", data.current_experience() <= 65535);
+  markLegacyRange("experience_for_upgrade", data.experience_for_upgrade() <= 65535);
+  markLegacyRange("out_of_combat_countdown", data.out_of_combat_countdown() <= 65535);
+  m_dynamicObservation = fields;
+  m_dynamicReceived = true;
+
+  // Legacy projections are updated only when a value fits their existing type.
+  if (data.has_current_health() && data.current_health() <= 65535) {
+    robot->currentHP = static_cast<quint16>(data.current_health());
+    robot->currentRoundMaxHP = qMax(robot->currentRoundMaxHP, robot->currentHP);
+    if (robot->currentHP == 0) robot->status = RobotStatus::DESTROYED;
+    else if (robot->status == RobotStatus::DESTROYED || robot->status == RobotStatus::OFFLINE)
+      robot->status = RobotStatus::NORMAL;
+    if (robot->currentHP == 0) emit robotPositionUpdated(robot->robotId, 0, 0, 0, false);
+  }
+  if (data.has_current_heat() && std::isfinite(data.current_heat()) && data.current_heat() >= 0 && data.current_heat() <= 65535) {
     const QDateTime now = QDateTime::currentDateTime();
-    const bool recentlyOverridden =
-        m_lastLocalHeatSet.isValid() && (m_lastLocalHeatSet.msecsTo(now) < 1500);
-    if (!recentlyOverridden) {
-      robot->currentHeat = static_cast<quint16>(data.current_heat());
-      if (robot->currentHeat <= 0) {
-        robot->isHeatOverLimit = false;
-      }
+    const bool localOverride = m_lastLocalHeatSet.isValid() && m_lastLocalHeatSet.msecsTo(now) < 1500;
+    if (!localOverride) {
+      robot->currentHeat = data.current_heat();
+      if (robot->currentHeat == 0) robot->isHeatOverLimit = false;
+      checkHeatLimit(robot);
     }
   }
-  robot->firerate = static_cast<quint16>(data.last_projectile_fire_rate());
-  robot->launchingFrequency =
-      static_cast<quint16>(data.last_projectile_fire_rate());
-  robot->currentChassisEnergy =
-      static_cast<quint16>(data.current_chassis_energy());
-  robot->power = robot->currentChassisEnergy;
-  robot->bufferEnergy = static_cast<quint16>(data.current_buffer_energy());
-  const quint64 currentExperience = data.current_experience();
-  const quint64 experienceForUpgrade = data.experience_for_upgrade();
-  robot->experience =
-      static_cast<quint16>(qMin<quint64>(currentExperience, 65535ull));
-  robot->maxExperience = static_cast<quint16>(
-      qMin<quint64>(currentExperience + experienceForUpgrade, 65535ull));
-  if (robot->type != RobotType::HEAVY) {
-    robot->allowedAmmo17mm = static_cast<quint16>(data.remaining_ammo());
+  if (data.has_current_buffer_energy() && data.current_buffer_energy() <= 65535)
+    robot->bufferEnergy = static_cast<quint16>(data.current_buffer_energy());
+  if (data.has_current_experience() && data.current_experience() <= 65535)
+    robot->experience = static_cast<quint16>(data.current_experience());
+  if (m_dynamicAccepted.contains("current_experience") && m_dynamicAccepted.contains("experience_for_upgrade")) {
+    const quint64 total = m_dynamicAccepted.value("current_experience").toULongLong() + m_dynamicAccepted.value("experience_for_upgrade").toULongLong();
+    if (total <= 65535) robot->maxExperience = static_cast<quint16>(total);
   }
-  robot->isOutOfCombat = data.is_out_of_combat();
-  robot->canRemoteHeal = data.can_remote_heal();
-  robot->canRemoteAmmo = data.can_remote_ammo();
+  if (data.has_is_out_of_combat()) {
+    robot->isOutOfCombat = data.is_out_of_combat();
+    if (!robot->isOutOfCombat) robot->lastDamageTime = QDateTime::currentDateTime();
+  }
+  if (data.has_out_of_combat_countdown() && data.out_of_combat_countdown() <= 65535)
+    robot->outOfCombatCountdown = static_cast<quint16>(data.out_of_combat_countdown());
+  if (data.has_can_remote_heal()) robot->canRemoteHeal = data.can_remote_heal();
+  if (data.has_can_remote_ammo()) robot->canRemoteAmmo = data.can_remote_ammo();
+  // #3 is projectile speed, #4 is reserved, and #9 has no confirmed ammunition-type mapping.
   robot->lastUpdateTime = QDateTime::currentDateTime();
-  robot->outOfCombatCountdown = data.out_of_combat_countdown();
-
-  if (robot->currentHP == 0) {
-    robot->status = RobotStatus::DESTROYED;
-  } else if (robot->status == RobotStatus::DESTROYED ||
-             robot->status == RobotStatus::OFFLINE) {
-    robot->status = RobotStatus::NORMAL;
-  }
-
-  emitDataChanged();
+  emit robotDynamicStatusChanged();
   emit myRobotUpdated();
-  emit robotDataUpdated(robotId);
-
-  if (!robot->isOutOfCombat) {
-    robot->lastDamageTime = QDateTime::currentDateTime();
-  }
-
-  checkHeatLimit(robot);
-  if(data.current_health() <= 0){
-    //更新小地图上机器人显示状态
-    emit robotPositionUpdated(robotId, 0, 0, 0, false);
-  }
+  emit robotDataUpdated(robot->robotId);
+  emitDataChanged();
 }
 
 bool GameData::isRobotConnected(int robotId) const {

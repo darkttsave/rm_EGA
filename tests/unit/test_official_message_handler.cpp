@@ -13,9 +13,16 @@
 #include <QStandardPaths>
 #include <QtTest>
 #include <limits>
+#include <atomic>
+#include <QThread>
 
 using RM::OfficialMessageHandler;
 namespace {
+std::atomic<bool> dynamicCallbackObserved{false};
+void captureDynamicCallback(QtMsgType, const QMessageLogContext &, const QString &message) {
+  if (message.contains(QStringLiteral("RM26_MQTT_RX_TIMING direction=rx topic=RobotDynamicStatus")))
+    dynamicCallbackObserved.store(true);
+}
 QStringList detailedLogs;
 void captureDetails(QtMsgType type, const QMessageLogContext &, const QString &message) {
   if (type == QtInfoMsg && (message.startsWith("[GlobalUnitStatus]") ||
@@ -219,6 +226,53 @@ private slots:
     network.stopMqtt(); publisher.disconnect(); broker.terminate(); QVERIFY(broker.waitForFinished(5000));
   }
 #endif
+#ifdef RM_HAS_MQTT
+  void dynamicIdentityAndQueuedMqttIsolation() {
+    if (QStandardPaths::findExecutable(QStringLiteral("mosquitto")).isEmpty()) QSKIP("mosquitto unavailable");
+    QTcpServer probe; if (!probe.listen(QHostAddress::LocalHost, 0)) QSKIP("local listening unavailable");
+    const quint16 port = probe.serverPort(); probe.close();
+    QProcess broker; broker.start(QStringLiteral("mosquitto"), {QStringLiteral("-p"), QString::number(port)});
+    QVERIFY(broker.waitForStarted()); QTest::qWait(150);
+    GameData data; data.setCurrentRobotId(1); RM::NetworkManager network(&data);
+    const QString uri = QStringLiteral("tcp://127.0.0.1:%1").arg(port);
+    QSignalSpy connected(&network, &RM::NetworkManager::mqttConnectCompleted);
+    network.startMqtt(uri, QStringLiteral("1"));
+    QTRY_VERIFY_WITH_TIMEOUT(!connected.isEmpty(), 5000); QVERIFY(network.isMqttConnected());
+    MqttManager publisher; QSignalSpy pubConnected(&publisher, &MqttManager::connectCompleted);
+    publisher.connectToBrokerAsync(uri, QStringLiteral("a1-test-publisher"));
+    QTRY_VERIFY_WITH_TIMEOUT(!pubConnected.isEmpty(), 5000); QVERIFY(publisher.isConnected());
+    robomaster::RobotDynamicStatus msg; msg.set_current_heat(12.5f);
+    QVERIFY(publisher.publish(QStringLiteral("RobotDynamicStatus"), bytes(msg), 1));
+    QTRY_COMPARE_WITH_TIMEOUT(data.robotDynamicStatus().value("accepted").toMap().value("current_heat").toFloat(), 12.5f, 5000);
+    data.setCurrentRobotId(101);
+    QVERIFY(publisher.publish(QStringLiteral("RobotDynamicStatus"), bytes(msg), 1));
+    QTest::qWait(200); QVERIFY(!data.robotDynamicStatus().value("received").toBool());
+    data.setCurrentRobotId(1);
+    // Ensure a callback has queued the old message while the Qt thread remains blocked.
+    dynamicCallbackObserved.store(false);
+    const auto oldHandler = qInstallMessageHandler(captureDynamicCallback);
+    msg.set_current_heat(88.5f);
+    const bool sent = publisher.publish(QStringLiteral("RobotDynamicStatus"), bytes(msg), 1);
+    for (int i = 0; i < 100 && !dynamicCallbackObserved.load(); ++i) QThread::msleep(10);
+    const bool callbackSeen = dynamicCallbackObserved.load();
+    network.stopMqtt();
+    data.setCurrentRobotId(101);
+    QCoreApplication::processEvents();
+    qInstallMessageHandler(oldHandler);
+    QVERIFY(sent); QVERIFY(callbackSeen);
+    QVERIFY(!data.robotDynamicStatus().value("received").toBool());
+    connected.clear(); network.startMqtt(uri, QStringLiteral("101"));
+    QTRY_VERIFY_WITH_TIMEOUT(!connected.isEmpty(), 5000); QVERIFY(network.isMqttConnected());
+    msg.set_current_heat(22.25f);
+    QVERIFY(publisher.publish(QStringLiteral("RobotDynamicStatus"), bytes(msg), 1));
+    QTRY_COMPARE_WITH_TIMEOUT(data.robotDynamicStatus().value("accepted").toMap().value("current_heat").toFloat(), 22.25f, 5000);
+    QCOMPARE(data.robotDynamicStatus().value("robotId").toInt(), 101);
+    broker.terminate(); QVERIFY(broker.waitForFinished(5000));
+    QTRY_VERIFY_WITH_TIMEOUT(!network.isMqttConnected(), 5000);
+    QTRY_VERIFY_WITH_TIMEOUT(!data.robotDynamicStatus().value("received").toBool(), 5000);
+    network.stopMqtt(); publisher.disconnect();
+  }
+#endif
   void staticPerformanceAndDeveloperPanel() {
     Q_INIT_RESOURCE(qml);
     GameData data; data.setCurrentRobotId(1);
@@ -297,6 +351,78 @@ private slots:
     data.setCurrentRobotId(101);
     QTRY_VERIFY(view->property("text").toString().contains(QStringLiteral("ID 101")));
     QVERIFY(view->property("text").toString().contains(QStringLiteral("最大血量: 未上报")));
+  }
+  void dynamicPresencePrecisionAndPanel() {
+    Q_INIT_RESOURCE(qml);
+    GameData data; data.setCurrentRobotId(1);
+    QQuickWidget panel; panel.rootContext()->setContextProperty("gameData", &data);
+    panel.setSource(QUrl(QStringLiteral("qrc:/qml/RM27DevPanel.qml")));
+    QCOMPARE(panel.status(), QQuickWidget::Ready);
+    std::function<QQuickItem *(QQuickItem *, const QString &)> findVisual =
+      [&](QQuickItem *item, const QString &name) -> QQuickItem * {
+        if (item->objectName() == name) return item;
+        for (auto *child : item->childItems()) if (auto *found = findVisual(child, name)) return found;
+        return nullptr;
+      };
+    auto *summary = panel.rootObject()->findChild<QObject *>("rm27DynamicSummary"); QVERIFY(summary);
+    QVERIFY(summary->property("text").toString().contains(QStringLiteral("已收到: 否")));
+    auto *heat = findVisual(panel.rootObject(), "rm27Dynamic_current_heat");
+    auto *ammo = findVisual(panel.rootObject(), "rm27Dynamic_remaining_ammo");
+    auto *reserve = findVisual(panel.rootObject(), "rm27Dynamic_reserved");
+    QVERIFY(heat); QVERIFY(ammo); QVERIFY(reserve);
+    robomaster::RobotDynamicStatus msg;
+    msg.set_current_health(99); msg.set_current_heat(12.75f); msg.set_last_projectile_fire_rate(16.5f);
+    msg.set_reserved(1234); msg.set_current_buffer_energy(42); msg.set_current_experience(123);
+    msg.set_experience_for_upgrade(77); msg.set_total_projectiles_fired(222); msg.set_remaining_ammo(33);
+    msg.set_is_out_of_combat(false); msg.set_out_of_combat_countdown(5);
+    msg.set_can_remote_heal(false); msg.set_can_remote_ammo(true);
+    auto *robot = data.getRobotDataRef(1); QVERIFY(robot);
+    robot->power = 17; robot->currentChassisEnergy = 19; robot->firerate = 7; robot->launchingFrequency = 8;
+    QSignalSpy updates(&data, &GameData::robotDynamicStatusChanged);
+    QCOMPARE(OfficialMessageHandler::handle("RobotDynamicStatus", bytes(msg), data), OfficialMessageHandler::Result::Parsed);
+    QCOMPARE(updates.count(), 1);
+    const auto snap = data.robotDynamicStatus(); QVERIFY(snap.value("received").toBool());
+    QCOMPARE(snap.value("robotId").toInt(), 1);
+    const auto fields = snap.value("fields").toMap(); const auto accepted = snap.value("accepted").toMap();
+    for (const char *key : {"current_health", "current_heat", "last_projectile_fire_rate", "current_buffer_energy", "current_experience", "experience_for_upgrade", "total_projectiles_fired", "remaining_ammo", "is_out_of_combat", "out_of_combat_countdown", "can_remote_heal", "can_remote_ammo"})
+      QCOMPARE(fields.value(key).toMap().value("state").toString(), QStringLiteral("valid"));
+    QCOMPARE(fields.value("reserved").toMap().value("state").toString(), QStringLiteral("not_applicable"));
+    QCOMPARE(accepted.value("current_heat").toFloat(), 12.75f);
+    QCOMPARE(accepted.value("last_projectile_fire_rate").toFloat(), 16.5f);
+    QCOMPARE(accepted.value("total_projectiles_fired").toUInt(), 222u); QCOMPARE(accepted.value("remaining_ammo").toUInt(), 33u);
+    QCOMPARE(accepted.value("is_out_of_combat").toBool(), false); QCOMPARE(accepted.value("can_remote_heal").toBool(), false);
+    QCOMPARE(robot->currentHeat, 12.75f); QCOMPARE(robot->currentHP, 99);
+    QCOMPARE(robot->power, 17); QCOMPARE(robot->currentChassisEnergy, 19);
+    QCOMPARE(robot->firerate, 7); QCOMPARE(robot->launchingFrequency, 8);
+    QCOMPARE(robot->allowedAmmo17mm, 0); QCOMPARE(robot->allowedAmmo42mm, 0);
+    QTRY_VERIFY(heat->property("text").toString().contains(QStringLiteral("有效 12.75")));
+    QVERIFY(ammo->property("text").toString().contains(QStringLiteral("有效 33")));
+    QVERIFY(reserve->property("text").toString().contains(QStringLiteral("不适用")));
+    msg.Clear(); msg.set_current_health(0); msg.set_current_heat(0); msg.set_remaining_ammo(0); msg.set_can_remote_ammo(false);
+    QCOMPARE(OfficialMessageHandler::handle("RobotDynamicStatus", bytes(msg), data), OfficialMessageHandler::Result::Parsed);
+    QCOMPARE(robot->currentHP, 0); QCOMPARE(robot->currentHeat, 0.0f);
+    QCOMPARE(data.robotDynamicStatus().value("fields").toMap().value("remaining_ammo").toMap().value("value").toUInt(), 0u);
+    QVERIFY(!data.robotDynamicStatus().value("fields").toMap().value("can_remote_ammo").toMap().value("value").toBool());
+    QCOMPARE(data.robotDynamicStatus().value("fields").toMap().value("last_projectile_fire_rate").toMap().value("state").toString(), QStringLiteral("unreported"));
+    QCOMPARE(data.robotDynamicStatus().value("accepted").toMap().value("last_projectile_fire_rate").toFloat(), 16.5f);
+    msg.Clear(); msg.set_current_heat(std::numeric_limits<float>::quiet_NaN()); msg.set_last_projectile_fire_rate(std::numeric_limits<float>::infinity());
+    QCOMPARE(OfficialMessageHandler::handle("RobotDynamicStatus", bytes(msg), data), OfficialMessageHandler::Result::Parsed);
+    QCOMPARE(data.robotDynamicStatus().value("fields").toMap().value("current_heat").toMap().value("state").toString(), QStringLiteral("invalid"));
+    QCOMPARE(data.robotDynamicStatus().value("fields").toMap().value("last_projectile_fire_rate").toMap().value("state").toString(), QStringLiteral("invalid"));
+    QCOMPARE(robot->currentHeat, 0.0f);
+    msg.Clear(); msg.set_current_heat(-1); msg.set_current_health(65536); msg.set_current_buffer_energy(65536);
+    QCOMPARE(OfficialMessageHandler::handle("RobotDynamicStatus", bytes(msg), data), OfficialMessageHandler::Result::Parsed);
+    QCOMPARE(robot->currentHP, 0); QCOMPARE(robot->bufferEnergy, 42);
+    QCOMPARE(data.robotDynamicStatus().value("accepted").toMap().value("current_health").toUInt(), 65536u);
+    QCOMPARE(data.robotDynamicStatus().value("fields").toMap().value("current_health").toMap().value("legacyProjection").toString(), QStringLiteral("out_of_range"));
+    const auto before = data.robotDynamicStatus();
+    QCOMPARE(OfficialMessageHandler::handle("RobotDynamicStatus", QByteArray::fromHex("0880"), data), OfficialMessageHandler::Result::ParseFailed);
+    QCOMPARE(data.robotDynamicStatus(), before);
+    data.setCurrentRobotId(101); QVERIFY(!data.robotDynamicStatus().value("received").toBool());
+    QVERIFY(data.robotDynamicStatus().value("accepted").toMap().isEmpty());
+    data.setCurrentRobotId(2);
+    QCOMPARE(OfficialMessageHandler::handle("RobotDynamicStatus", bytes(msg), data), OfficialMessageHandler::Result::Parsed);
+    QVERIFY(!data.robotDynamicStatus().value("received").toBool());
   }
   void supportedMessagesAndLogging() {
     GameData data;

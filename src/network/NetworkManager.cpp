@@ -1138,6 +1138,7 @@ void NetworkManager::startMqtt(const QString &brokerUri,
             // 启动 MQTT 消息日志会话
             MqttLogger::instance()->startSession();
           } else {
+            if (m_gameData) m_gameData->clearRobotDynamicStatus();
             MqttLogger::instance()->stopSession();
           }
         });
@@ -1155,6 +1156,7 @@ void NetworkManager::startMqtt(const QString &brokerUri,
 }
 
 void NetworkManager::stopMqtt() {
+  if (m_gameData) m_gameData->clearRobotDynamicStatus();
   if (m_mqttManager) {
     m_mqttManager->disconnect();
   }
@@ -1228,9 +1230,9 @@ void NetworkManager::processMqttMessage(const QString &topic,
   }
   dumpMqttEvent(QStringLiteral("received"), topic, payload, m_gameData);
 
-  if (topic == QLatin1String("RobotModuleStatus") && m_mqttManager &&
+  if ((topic == QLatin1String("RobotModuleStatus") || topic == QLatin1String("RobotDynamicStatus")) && m_mqttManager &&
       (!m_mqttManager->isConnected() || m_mqttManager->clientId() != QString::number(m_gameData->getCurrentRobotId()))) {
-    qWarning() << "RobotModuleStatus ignored: MQTT identity does not match current robot";
+    qWarning() << topic << "ignored: MQTT identity does not match current robot";
     return;
   }
 

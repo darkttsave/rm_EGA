@@ -209,6 +209,10 @@ OfficialMessageHandler::Result OfficialMessageHandler::handle(
             .arg(msg.current_health())
             .arg(msg.remaining_ammo()),
         QJsonObject{{QStringLiteral("protocol_has_robot_id"), false},
+                    {QStringLiteral("has_current_health"), msg.has_current_health()},
+                    {QStringLiteral("has_current_heat"), msg.has_current_heat()},
+                    {QStringLiteral("has_last_projectile_fire_rate"), msg.has_last_projectile_fire_rate()},
+                    {QStringLiteral("has_remaining_ammo"), msg.has_remaining_ammo()},
                     {QStringLiteral("current_health"),
                      static_cast<int>(msg.current_health())},
                     {QStringLiteral("current_heat"), msg.current_heat()},
@@ -220,19 +224,21 @@ OfficialMessageHandler::Result OfficialMessageHandler::handle(
                      msg.can_remote_ammo()}});
     qInfo().noquote()
         << QStringLiteral("[RobotDynamicStatus] hp=%1 heat=%2 fire_rate=%3 "
-                          "chassis_energy=%4 buf_energy=%5 "
+                          "reserved=%4 buf_energy=%5 "
                           "exp=%6 exp_up=%7 fired=%8 ammo=%9 "
                           "out_of_combat=%10 combat_countdown=%11 "
-                          "remote_heal=%12 remote_ammo=%13")
+                          "remote_heal=%12 remote_ammo=%13 presence_hp=%14 presence_heat=%15 presence_speed=%16 presence_ammo=%17")
                .arg(msg.current_health()).arg(msg.current_heat())
                .arg(msg.last_projectile_fire_rate())
-               .arg(msg.current_chassis_energy())
+               .arg(msg.reserved())
                .arg(msg.current_buffer_energy())
                .arg(msg.current_experience()).arg(msg.experience_for_upgrade())
                .arg(msg.total_projectiles_fired()).arg(msg.remaining_ammo())
                .arg(msg.is_out_of_combat())
                .arg(msg.out_of_combat_countdown())
-               .arg(msg.can_remote_heal()).arg(msg.can_remote_ammo());
+               .arg(msg.can_remote_heal()).arg(msg.can_remote_ammo())
+               .arg(msg.has_current_health()).arg(msg.has_current_heat())
+               .arg(msg.has_last_projectile_fire_rate()).arg(msg.has_remaining_ammo());
     gameData.updateRobotDynamicStatus(msg);
     return Result::Parsed;
   }

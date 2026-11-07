@@ -114,7 +114,7 @@ void TestMqttParsing::testMqttParsing() {
     msg.set_current_health(250);
     msg.set_current_heat(10.5f);
     msg.set_last_projectile_fire_rate(5.0f);
-    msg.set_current_chassis_energy(80);
+    msg.set_reserved(80);
     msg.set_current_buffer_energy(40);
     msg.set_current_experience(200);
     msg.set_experience_for_upgrade(500);

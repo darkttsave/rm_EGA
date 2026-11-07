@@ -8163,7 +8163,9 @@ void MainWindow::onSimulatorDataReceived(PacketType type,
       memcpy(&robot.currentHP, data.data() + 2, 2);
       memcpy(&robot.maxHP, data.data() + 4, 2);
       memcpy(&robot.power, data.data() + 6, 2);
-      memcpy(&robot.currentHeat, data.data() + 8, 2);
+      quint16 simulatorHeat = 0;
+      memcpy(&simulatorHeat, data.data() + 8, 2);
+      robot.currentHeat = simulatorHeat;
       memcpy(&robot.bufferEnergy, data.data() + 10, 2);
 
       // 通过现有细粒度接口更新 GameData。

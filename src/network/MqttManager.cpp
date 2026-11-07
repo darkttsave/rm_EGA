@@ -350,7 +350,7 @@ int MqttManager::messageArrivedCallback(void *context, char *topicName,
   QMetaObject::invokeMethod(
       self,
       [self, topic, payload, payloadSha1, receivedMs, observeMessage, generation]() {
-        if (topic == QLatin1String("RobotModuleStatus") && generation != self->m_connectionGeneration.load()) return;
+        if ((topic == QLatin1String("RobotModuleStatus") || topic == QLatin1String("RobotDynamicStatus")) && generation != self->m_connectionGeneration.load()) return;
         if (observeMessage) {
           emit self->messageObserved(topic, payload.size(), payloadSha1,
                                      receivedMs);
@@ -369,6 +369,7 @@ void MqttManager::connectionLostCallback(void *context, char *cause) {
   if (!self)
     return;
 
+  ++self->m_connectionGeneration;
   QString reason = cause ? QString::fromUtf8(cause) : "Unknown";
   QMetaObject::invokeMethod(
       self,
