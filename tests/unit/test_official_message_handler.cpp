@@ -12,6 +12,7 @@
 #include <QProcess>
 #include <QStandardPaths>
 #include <QtTest>
+#include <limits>
 
 using RM::OfficialMessageHandler;
 namespace {
@@ -204,6 +205,13 @@ private slots:
     QTRY_COMPARE_WITH_TIMEOUT(updates.count(), 1, 5000);
     QTest::qWait(150); QCOMPARE(updates.count(), 1);
     QCOMPARE(data.robotModuleStatus().value("modular_42mm").toInt(), 1);
+    robomaster::RobotStaticStatus stat; stat.set_robot_id(1); stat.set_max_health(100);
+    QVERIFY(publisher.publish(QStringLiteral("RobotStaticStatus"), bytes(stat), 1));
+    QTRY_COMPARE_WITH_TIMEOUT(data.getRobotById(1)->maxHP, 100, 5000);
+    stat.set_max_health(450); stat.set_heat_cooldown_rate(66.5f);
+    QVERIFY(publisher.publish(QStringLiteral("RobotStaticStatus"), bytes(stat), 1));
+    QTRY_COMPARE_WITH_TIMEOUT(data.getRobotById(1)->maxHP, 450, 5000);
+    QCOMPARE(data.getRobotById(1)->coolingValue, 66.5f);
     data.setCurrentRobotId(101); updates.clear();
     QVERIFY(publisher.publish(QStringLiteral("RobotModuleStatus"), bytes(msg), 1));
     QTest::qWait(400); QCOMPARE(updates.count(), 0);
@@ -211,6 +219,85 @@ private slots:
     network.stopMqtt(); publisher.disconnect(); broker.terminate(); QVERIFY(broker.waitForFinished(5000));
   }
 #endif
+  void staticPerformanceAndDeveloperPanel() {
+    Q_INIT_RESOURCE(qml);
+    GameData data; data.setCurrentRobotId(1);
+    QQuickWidget panel; panel.rootContext()->setContextProperty("gameData", &data);
+    panel.setSource(QUrl(QStringLiteral("qrc:/qml/RM27DevPanel.qml")));
+    QCOMPARE(panel.status(), QQuickWidget::Ready);
+    auto *view = panel.rootObject()->findChild<QObject *>("rm27StaticPerformance");
+    QVERIFY(view); QVERIFY(view->property("text").toString().contains(QStringLiteral("最大血量: 未上报")));
+    QQuickWidget hud; hud.rootContext()->setContextProperty("gameData", &data);
+    hud.setSource(QUrl(QStringLiteral("qrc:/qml/CentralAimingHUD.qml")));
+    QCOMPARE(hud.status(), QQuickWidget::Ready);
+    QCOMPARE(hud.rootObject()->property("heatLimit").toDouble(), 0.0);
+    robomaster::RobotStaticStatus msg; msg.set_robot_id(1); msg.set_connection_state(1);
+    msg.set_max_health(100); msg.set_performance_system_shooter(1); msg.set_performance_system_chassis(2);
+    msg.set_max_heat(0); msg.set_heat_cooldown_rate(0); msg.set_max_power(50);
+    QSignalSpy updates(&data, &GameData::myRobotUpdated);
+    QCOMPARE(OfficialMessageHandler::handle("RobotStaticStatus", bytes(msg), data), OfficialMessageHandler::Result::Parsed);
+    const auto *robot = data.getRobotById(1); QVERIFY(robot);
+    QCOMPARE(robot->maxHP, 100); QCOMPARE(robot->shooterPerformanceSelection, 1); QCOMPARE(robot->chassisPerformanceSelection, 2);
+    QVERIFY(updates.count() > 0);
+    QTRY_VERIFY(view->property("text").toString().contains(QStringLiteral("最大血量: 100")));
+    QVERIFY(view->property("text").toString().contains(QStringLiteral("冷却优先")));
+    QVERIFY(view->property("text").toString().contains(QStringLiteral("功率优先")));
+    msg.set_max_health(450); msg.set_performance_system_shooter(2); msg.set_performance_system_chassis(1);
+    msg.set_max_heat(250); msg.set_heat_cooldown_rate(66.5f); msg.set_max_power(55);
+    msg.set_max_buffer_energy(80); msg.set_max_chassis_energy(120);
+    QCOMPARE(OfficialMessageHandler::handle("RobotStaticStatus", bytes(msg), data), OfficialMessageHandler::Result::Parsed);
+    QCOMPARE(robot->maxHP, 450); QCOMPARE(robot->heatLimit, 250); QCOMPARE(robot->coolingValue, 66.5f);
+    QTRY_COMPARE(hud.rootObject()->property("heatLimit").toDouble(), 250.0);
+    QCOMPARE(robot->maxPower, 55); QCOMPARE(robot->maxBufferEnergy, 80); QCOMPARE(robot->maxChassisEnergy, 120);
+    QTRY_VERIFY(view->property("text").toString().contains(QStringLiteral("最大血量: 450")));
+    QVERIFY(view->property("text").toString().contains(QStringLiteral("冷却速率: 66.5")));
+    QVERIFY(view->property("text").toString().contains(QStringLiteral("爆发优先")));
+    QVERIFY(view->property("text").toString().contains(QStringLiteral("血量优先")));
+    robomaster::RobotStaticStatus energy;
+    energy.set_robot_id(1); energy.set_max_buffer_energy(60); energy.set_max_chassis_energy(140);
+    QCOMPARE(OfficialMessageHandler::handle("RobotStaticStatus", bytes(energy), data), OfficialMessageHandler::Result::Parsed);
+    QCOMPARE(robot->maxBufferEnergy, 60); QCOMPARE(robot->maxChassisEnergy, 140);
+    QCOMPARE(robot->maxHP, 450); QCOMPARE(robot->heatLimit, 250);
+    QTRY_VERIFY(view->property("text").toString().contains(QStringLiteral("最大缓冲能量: 60")));
+    QVERIFY(view->property("text").toString().contains(QStringLiteral("最大底盘能量: 140")));
+    energy.set_max_buffer_energy(80); energy.set_max_chassis_energy(120);
+    QCOMPARE(OfficialMessageHandler::handle("RobotStaticStatus", bytes(energy), data), OfficialMessageHandler::Result::Parsed);
+    QCOMPARE(robot->maxBufferEnergy, 80); QCOMPARE(robot->maxChassisEnergy, 120);
+    QTRY_VERIFY(view->property("text").toString().contains(QStringLiteral("最大缓冲能量: 80")));
+    QVERIFY(view->property("text").toString().contains(QStringLiteral("最大底盘能量: 120")));
+    robomaster::Event event; event.set_event_id(16);
+    QCOMPARE(OfficialMessageHandler::handle("Event", bytes(event), data), OfficialMessageHandler::Result::Parsed);
+    robomaster::RobotModuleStatus modules; modules.set_modular_42mm(1);
+    QCOMPARE(OfficialMessageHandler::handle("RobotModuleStatus", bytes(modules), data), OfficialMessageHandler::Result::Parsed);
+    QCOMPARE(robot->maxHP, 450); QCOMPARE(robot->shooterPerformanceSelection, 2);
+    robomaster::RobotStaticStatus dead; dead.set_robot_id(1); dead.set_alive_state(2);
+    QCOMPARE(OfficialMessageHandler::handle("RobotStaticStatus", bytes(dead), data), OfficialMessageHandler::Result::Parsed);
+    QCOMPARE(robot->status, RobotStatus::DESTROYED);
+    msg.Clear(); msg.set_robot_id(1); msg.set_field_state(0); msg.set_max_health(100);
+    const bool connectedBefore = robot->isClientConnected;
+    const auto statusBefore = robot->status;
+    QCOMPARE(OfficialMessageHandler::handle("RobotStaticStatus", bytes(msg), data), OfficialMessageHandler::Result::Parsed);
+    QCOMPARE(robot->isClientConnected, connectedBefore); QCOMPARE(robot->status, statusBefore);
+    QCOMPARE(robot->maxHP, 100); QCOMPARE(robot->heatLimit, 250); QCOMPARE(robot->maxPower, 55);
+    QTRY_VERIFY(view->property("text").toString().contains(QStringLiteral("最大血量: 100")));
+    QVERIFY(view->property("text").toString().contains(QStringLiteral("最大热量: 未上报")));
+    for (uint32_t value : {0u, 3u, 4u, 257u}) {
+      msg.set_performance_system_shooter(value); msg.set_performance_system_chassis(value);
+      QCOMPARE(OfficialMessageHandler::handle("RobotStaticStatus", bytes(msg), data), OfficialMessageHandler::Result::Parsed);
+      QCOMPARE(robot->shooterPerformanceSelection, 2); QCOMPARE(robot->chassisPerformanceSelection, 1);
+      QVERIFY(view->property("text").toString().contains(QStringLiteral("非法值 %1").arg(value)));
+    }
+    msg.set_max_health(65536); msg.set_max_heat(65536); msg.set_heat_cooldown_rate(std::numeric_limits<float>::quiet_NaN());
+    msg.set_max_power(65536); msg.set_max_buffer_energy(65536); msg.set_max_chassis_energy(65536);
+    QCOMPARE(OfficialMessageHandler::handle("RobotStaticStatus", bytes(msg), data), OfficialMessageHandler::Result::Parsed);
+    QCOMPARE(robot->maxHP, 100); QCOMPARE(robot->heatLimit, 250); QCOMPARE(robot->coolingValue, 66.5f);
+    QCOMPARE(robot->maxPower, 55); QCOMPARE(robot->maxBufferEnergy, 80); QCOMPARE(robot->maxChassisEnergy, 120);
+    QCOMPARE(OfficialMessageHandler::handle("RobotStaticStatus", QByteArray::fromHex("2080"), data), OfficialMessageHandler::Result::ParseFailed);
+    QCOMPARE(robot->maxHP, 100);
+    data.setCurrentRobotId(101);
+    QTRY_VERIFY(view->property("text").toString().contains(QStringLiteral("ID 101")));
+    QVERIFY(view->property("text").toString().contains(QStringLiteral("最大血量: 未上报")));
+  }
   void supportedMessagesAndLogging() {
     GameData data;
     QSignalSpy fortress(&data, &GameData::allyFortressOccupationAlertTriggered);

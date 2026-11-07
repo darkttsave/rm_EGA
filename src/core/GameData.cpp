@@ -1013,6 +1013,7 @@ QVariantMap GameData::getRobotInfo(int robotId) const {
     const int panelMaxHp = static_cast<int>(robotDisplayMaxHpForPanels(*robot));
     const int panelLevel = static_cast<int>(robotDisplayLevelForPanels(*robot));
     // 基础血量
+    map["staticPerformance"] = robot->staticPerformanceObservation;
     map["robotId"] = robot->robotId;
     const auto identity = RM::resolveRobotIdentity(robot->robotId);
     map["identityName"] = identity.displayName;
@@ -1033,7 +1034,7 @@ QVariantMap GameData::getRobotInfo(int robotId) const {
 
     // 热量数据 (用于热量环)
     map["currentHeat"] = robot->currentHeat;
-    map["heatLimit"] = robot->heatLimit > 0 ? robot->heatLimit : 240; // 默认240
+    map["heatLimit"] = robot->heatLimit;
     map["shooterLocked"] = robot->shooterLocked;
     map["shooterPermanentLocked"] = robot->shooterPermanentLocked;
     map["heatLockSeconds"] = robot->heatLockSeconds;
@@ -1056,6 +1057,8 @@ QVariantMap GameData::getRobotInfo(int robotId) const {
     // 等级和能量
     map["level"] = robot->level;
     map["power"] = robot->power;
+    map["maxPower"] = robot->maxPower;
+    map["maxChassisEnergy"] = robot->maxChassisEnergy;
     map["bufferEnergy"] = robot->bufferEnergy;
     map["maxBufferEnergy"] = robot->maxBufferEnergy;
     map["posX"] = robot->posX;
@@ -1911,7 +1914,7 @@ void GameData::updateRobotStaticStatus(const robomaster::RobotStaticStatus &data
   const int robotId = static_cast<int>(identity.rawId);
   qDebug() << "[RobotStaticStatus] robotId=" << robotId
            << "raw robot_type=" << data.robot_type();
-  if (*identity.role == RobotType::DART) {
+  if (*identity.role == RobotType::DART && data.has_connection_state()) {
     const bool newDartOnline = data.connection_state() == 1;
     const bool changed = !m_hasDartRobotConnectionState || m_dartRobotOnline != newDartOnline;
     m_hasDartRobotConnectionState = true;
@@ -1922,7 +1925,7 @@ void GameData::updateRobotStaticStatus(const robomaster::RobotStaticStatus &data
   if (!robot) return;
 
   //当等级发生变化时，发出系统消息
-  if (robot->level != data.level() && data.level()!=0) {
+  if (data.has_level() && data.level() <= 255 && robot->level != data.level() && data.level()!=0) {
     addSystemMessage(
                   QStringLiteral("当前机器人已升到%1级")
                       .arg(data.level()),
@@ -1930,40 +1933,60 @@ void GameData::updateRobotStaticStatus(const robomaster::RobotStaticStatus &data
   }
 
   if (robot) {
-    robot->level = static_cast<quint8>(data.level());
-    robot->maxHP = static_cast<quint16>(data.max_health());
-    robot->currentRoundMaxHP = qMax(robot->currentRoundMaxHP, robot->maxHP);
-    robot->heatLimit = static_cast<quint16>(data.max_heat());
-    robot->coolingValue = static_cast<quint16>(data.heat_cooldown_rate());
-    robot->maxPower = static_cast<quint16>(data.max_power());
-    robot->maxBufferEnergy = static_cast<quint16>(data.max_buffer_energy());
-    robot->maxChassisEnergy = static_cast<quint16>(data.max_chassis_energy());
-    robot->shooterPerformanceSelection =
-        static_cast<quint8>(data.performance_system_shooter());
-    robot->chassisPerformanceSelection =
-        static_cast<quint8>(data.performance_system_chassis());
+    // Store the latest reported fields separately from previously accepted values.
+    // Missing or invalid values never overwrite the effective parameters.
+    QVariantMap observation;
+    observation["received"] = true;
+#define OBSERVE(field) if (data.has_##field()) observation[QStringLiteral(#field)] = data.field()
+    OBSERVE(performance_system_shooter); OBSERVE(performance_system_chassis);
+    OBSERVE(max_health); OBSERVE(max_heat); OBSERVE(heat_cooldown_rate);
+    OBSERVE(max_power); OBSERVE(max_buffer_energy); OBSERVE(max_chassis_energy);
+#undef OBSERVE
+    robot->staticPerformanceObservation = observation;
+    if (data.has_level() && data.level() <= 255 && data.level() > 0)
+      robot->level = static_cast<quint8>(data.level());
+    if (data.has_max_health() && data.max_health() > 0 && data.max_health() <= 65535) {
+      robot->maxHP = static_cast<quint16>(data.max_health());
+      robot->currentRoundMaxHP = qMax(robot->currentRoundMaxHP, robot->maxHP);
+    }
+    if (data.has_max_heat() && data.max_heat() <= 65535)
+      robot->heatLimit = static_cast<quint16>(data.max_heat());
+    if (data.has_heat_cooldown_rate() && std::isfinite(data.heat_cooldown_rate()) &&
+        data.heat_cooldown_rate() >= 0 && data.heat_cooldown_rate() <= 65535)
+      robot->coolingValue = data.heat_cooldown_rate();
+    if (data.has_max_power() && data.max_power() <= 65535)
+      robot->maxPower = static_cast<quint16>(data.max_power());
+    if (data.has_max_buffer_energy() && data.max_buffer_energy() <= 65535)
+      robot->maxBufferEnergy = static_cast<quint16>(data.max_buffer_energy());
+    if (data.has_max_chassis_energy() && data.max_chassis_energy() <= 65535)
+      robot->maxChassisEnergy = static_cast<quint16>(data.max_chassis_energy());
+    if (data.has_performance_system_shooter() && data.performance_system_shooter() >= 1 && data.performance_system_shooter() <= 2)
+      robot->shooterPerformanceSelection = static_cast<quint8>(data.performance_system_shooter());
+    if (data.has_performance_system_chassis() && data.performance_system_chassis() >= 1 && data.performance_system_chassis() <= 2)
+      robot->chassisPerformanceSelection = static_cast<quint8>(data.performance_system_chassis());
     const bool previousEngineConnected =
         robot->isClientConnected || robot->isControllerConnected;
     const RobotStatus previousStatus = robot->status;
-    const bool engineConnected = (data.connection_state() != 0);
-    robot->tabStaticConnected = (data.connection_state() == 1);
-    robot->isClientConnected = engineConnected;
-    robot->isControllerConnected = engineConnected;
-    if (robot->type != RobotType::HEAVY) {
-      robot->chassisEnabled = (robot->chassisPerformanceSelection != 0);
-      robot->shooterLocked = (robot->shooterPerformanceSelection == 0);
+    const bool engineConnected = data.has_connection_state()
+                                     ? data.connection_state() != 0
+                                     : previousEngineConnected;
+    if (data.has_connection_state()) {
+      robot->tabStaticConnected = (data.connection_state() == 1);
+      robot->isClientConnected = engineConnected;
+      robot->isControllerConnected = engineConnected;
     }
+    // Performance mode is configuration, not a chassis/shooter enable signal.
 
     // RobotStaticStatus 只要下发就说明机器人在场内已注册。
     // connection_state=0 只表示硬件连接暂时断开，不应直接标记为 OFFLINE。
     // 只有 field_state==1（不在场地清单中）才是真正的离线。
     // currentHP==0 不作为 DESTROYED 条件：非当前机器人的 HP 来自 RobotDynamicStatus
     // 而它只更新 m_currentRobotId，队友机器人只靠 alive_state 判断存亡。
-    if (data.field_state() == 1) {
+    if (data.has_field_state() && data.field_state() == 1) {
       robot->status = RobotStatus::OFFLINE;
-    } else if (data.alive_state() == 2) {
+    } else if (data.has_alive_state() && data.alive_state() == 2) {
       robot->status = RobotStatus::DESTROYED;
-    } else {
+    } else if (data.has_alive_state() && data.alive_state() == 1) {
       robot->status = RobotStatus::NORMAL;
     }
 

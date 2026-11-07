@@ -26,7 +26,7 @@ Item {
     property bool showCustomStatusPanels: false
 
     property real currentHeat: (myRobot && myRobot.currentHeat !== undefined) ? Number(myRobot.currentHeat) : 0
-    property real heatLimit: (myRobot && myRobot.heatLimit !== undefined && Number(myRobot.heatLimit) > 0) ? Number(myRobot.heatLimit) : 240
+    property real heatLimit: (myRobot && myRobot.heatLimit !== undefined) ? Math.max(0, Number(myRobot.heatLimit)) : 0
     property real heatRatioRaw: heatLimit > 0 ? currentHeat / heatLimit : 0
     property real heatRatio: Math.max(0, Math.min(1, heatRatioRaw))
 

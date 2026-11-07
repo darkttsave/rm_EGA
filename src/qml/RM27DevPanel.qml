@@ -58,6 +58,29 @@ Rectangle {
                 color: "white"; font.pixelSize: 19
                 text: "当前机器人血量: " + (robot.hp === undefined ? "未知" : robot.hp + "/" + robot.maxHp)
             }
+            Text { text: "当前机器人静态性能（最近上报）"; color: "#8de0ff"; font.pixelSize: 21; topPadding: 10 }
+            Text {
+                objectName: "rm27StaticPerformance"
+                property var robot: { root.revision; return root.dataSource ? root.dataSource.getRobotInfo(root.dataSource.currentRobotId) : ({}) }
+                property var reported: robot.staticPerformance || ({})
+                function mode(key, first, second) {
+                    let v = reported[key]
+                    return v === undefined ? "未上报" : v === 1 ? first : v === 2 ? second : "非法值 " + v
+                }
+                function numberValue(key, min) {
+                    let v = reported[key]
+                    return v === undefined ? "未上报" : !isFinite(v) || v < min || v > 65535 ? "非法值 " + v : String(v)
+                }
+                color: "white"; font.pixelSize: 18; width: parent.width; wrapMode: Text.Wrap
+                text: "当前身份: " + (robot.identityTeam || "未知阵营") + " " + (robot.identityName || "未知") + " (ID " + (robot.robotId || 0) + ")" +
+                      "\n发射机构性能体系: " + mode("performance_system_shooter", "冷却优先", "爆发优先") +
+                      "    底盘性能体系: " + mode("performance_system_chassis", "血量优先", "功率优先") +
+                      "\n最大血量: " + numberValue("max_health", 1) + "    最大热量: " + numberValue("max_heat", 0) +
+                      "    冷却速率: " + numberValue("heat_cooldown_rate", 0) +
+                      "\n最大功率: " + numberValue("max_power", 0) + "    最大缓冲能量: " + numberValue("max_buffer_energy", 0) +
+                      "    最大底盘能量: " + numberValue("max_chassis_energy", 0) +
+                      "\n缺失或非法字段不会覆盖上次有效值；上报值不代表安装状态。"
+            }
             Text { text: "机器人状态（实际 GameData 值）"; color: "#8de0ff"; font.pixelSize: 21; topPadding: 10 }
             Repeater {
                 model: [1, 3, 4, 5, 6, 7, 8, 9, 101, 103, 104, 105, 106, 107, 108, 109]

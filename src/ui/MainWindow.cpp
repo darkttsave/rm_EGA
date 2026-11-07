@@ -138,10 +138,6 @@ QString chassisSelectionTextForValue(quint8 selection) {
     return QStringLiteral("血量优先");
   case 2:
     return QStringLiteral("功率优先");
-  case 3:
-    return QStringLiteral("英雄近战优先");
-  case 4:
-    return QStringLiteral("英雄远程优先");
   default:
     return QStringLiteral("初始设置");
   }
@@ -153,10 +149,6 @@ QString shooterSelectionTextForValue(quint8 selection) {
     return QStringLiteral("冷却优先");
   case 2:
     return QStringLiteral("爆发优先");
-  case 3:
-    return QStringLiteral("英雄近战优先");
-  case 4:
-    return QStringLiteral("英雄远程优先");
   default:
     return QStringLiteral("初始设置");
   }
@@ -4763,11 +4755,11 @@ void MainWindow::syncSettingsPanelState() {
   const QString protocolShooterText =
       shooterSelectionTextForValue(currentRobot->shooterPerformanceSelection);
   const bool hasProtocolChassis =
-      currentRobot->chassisPerformanceSelection >= 1 &&
-      currentRobot->chassisPerformanceSelection <= 4;
+      currentRobot->staticPerformanceObservation.value("performance_system_chassis").toUInt() >= 1 &&
+      currentRobot->staticPerformanceObservation.value("performance_system_chassis").toUInt() <= 2;
   const bool hasProtocolShooter =
-      currentRobot->shooterPerformanceSelection >= 1 &&
-      currentRobot->shooterPerformanceSelection <= 4;
+      currentRobot->staticPerformanceObservation.value("performance_system_shooter").toUInt() >= 1 &&
+      currentRobot->staticPerformanceObservation.value("performance_system_shooter").toUInt() <= 2;
   //当前下拉框底盘类型文本
   const QString currentChassisText =
       root->property("chassisSelectionText").toString();

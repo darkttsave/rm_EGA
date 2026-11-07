@@ -225,6 +225,7 @@ struct RobotData {
   quint8 infantry17mmMode;    //步兵机器人机构类型
   quint8 shooterPerformanceSelection; // 性能体系-发射机构
   quint8 chassisPerformanceSelection; //性能体系-底盘类型
+  QVariantMap staticPerformanceObservation; // 最近一条静态消息中的字段原值，缺失表示未上报
 
   quint16 launchingFrequency; // 当前射速 (发/秒)
   quint16 tabShootSpeedLimit; // Tab 面板射速上限显示值（m/s，工程为 0）
@@ -272,7 +273,7 @@ struct RobotData {
   // 热量相关
   quint16 currentHeat;        // 当前枪口热量
   quint16 heatLimit;          // 枪口热量上限
-  quint16 coolingValue;       // 枪口热量冷却值
+  float coolingValue;         // 枪口热量冷却值（协议为 float）
   bool isHeatOverLimit;     // 新增：热量超限标记 (用于驱动UI变红)
   quint16 q2HeatThreshold;  // 二级热量阈值 (Q2)
   bool shooterLocked;       // 射击机构是否被锁定 (裁判系统状态)
