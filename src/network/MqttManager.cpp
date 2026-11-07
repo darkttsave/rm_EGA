@@ -129,6 +129,7 @@ void MqttManager::connectToBrokerAsync(const QString &serverUri,
 }
 
 void MqttManager::disconnect() {
+  ++m_connectionGeneration;
   m_reconnectTimer->stop();
 
 #ifdef RM_HAS_MQTT
@@ -311,6 +312,7 @@ int MqttManager::messageArrivedCallback(void *context, char *topicName,
   QString topic = QString::fromUtf8(topicName);
   QByteArray payload((const char *)message->payload, message->payloadlen);
   const qint64 receivedMs = QDateTime::currentMSecsSinceEpoch();
+  const quint64 generation = self->m_connectionGeneration.load();
   const bool detailedTrace =
       !isHighRateVideoMessage(topic, payload) || verboseVideoLogEnabled();
   bool sampledVideoObservation = false;
@@ -347,7 +349,8 @@ int MqttManager::messageArrivedCallback(void *context, char *topicName,
 
   QMetaObject::invokeMethod(
       self,
-      [self, topic, payload, payloadSha1, receivedMs, observeMessage]() {
+      [self, topic, payload, payloadSha1, receivedMs, observeMessage, generation]() {
+        if (topic == QLatin1String("RobotModuleStatus") && generation != self->m_connectionGeneration.load()) return;
         if (observeMessage) {
           emit self->messageObserved(topic, payload.size(), payloadSha1,
                                      receivedMs);

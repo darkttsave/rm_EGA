@@ -166,6 +166,7 @@ private:
   // 视频消息只保留每秒一次的 DevHooks/延迟观测，避免数百条/秒的 trace
   // 压垮 UI，同时不破坏 messageObserved 的诊断契约。
   std::atomic<qint64> m_lastVideoObservationMs{0};
+  std::atomic<quint64> m_connectionGeneration{0};
 
   // --- 消息回调处理 ---
   static int messageArrivedCallback(void *context, char *topicName,

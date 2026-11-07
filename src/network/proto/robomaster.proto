@@ -477,17 +477,17 @@ message RadarMarkData {
 }
 
 message RobotModuleStatus {
-  uint32 power_manager = 1;
-  uint32 rfid = 2;
-  uint32 light_strip = 3;
-  uint32 small_shooter = 4;
-  uint32 big_shooter = 5;
-  uint32 uwb = 6;
-  uint32 armor = 7;
-  uint32 video_transmission = 8;
-  uint32 capacitor = 9;
-  uint32 main_controller = 10;
-  uint32 laser_detection_module = 11;
+  optional uint32 power_manager = 1;
+  optional uint32 rfid = 2;
+  optional uint32 light_strip = 3;
+  optional uint32 small_shooter = 4;
+  optional uint32 big_shooter = 5;
+  optional uint32 uwb = 6;
+  optional uint32 armor = 7;
+  optional uint32 video_transmission = 8;
+  optional uint32 capacitor = 9;
+  optional uint32 main_controller = 10;
+  optional uint32 modular_42mm = 11;
 }
 
 message RobotInjuryStat {

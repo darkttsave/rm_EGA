@@ -112,6 +112,105 @@ private slots:
     QTRY_COMPARE(card->property("currentHP").toInt(), int(data.getRobotById(104)->currentHP));
     QTRY_VERIFY(row->property("text").toString().contains(QString::number(data.getRobotById(104)->currentHP)));
   }
+  void moduleStatusPresenceAndIdentity() {
+    Q_INIT_RESOURCE(qml);
+    GameData data;
+    data.setCurrentRobotId(1);
+    QQuickWidget panel;
+    panel.rootContext()->setContextProperty("gameData", &data);
+    panel.setSource(QUrl(QStringLiteral("qrc:/qml/RM27DevPanel.qml")));
+    QCOMPARE(panel.status(), QQuickWidget::Ready);
+    auto *summary = panel.rootObject()->findChild<QObject *>("rm27ModuleSummary");
+    QVERIFY(summary);
+    QVERIFY(summary->property("text").toString().contains(QStringLiteral("已收到: 否")));
+    std::function<QQuickItem *(QQuickItem *, const QString &)> findVisual =
+      [&](QQuickItem *item, const QString &name) -> QQuickItem * {
+        if (item->objectName() == name) return item;
+        for (auto *child : item->childItems())
+          if (auto *found = findVisual(child, name)) return found;
+        return nullptr;
+      };
+    robomaster::RobotModuleStatus msg;
+    for (int value = 0; value <= 2; ++value) {
+      msg.set_power_manager(value); msg.set_rfid(value); msg.set_light_strip(value);
+      msg.set_small_shooter(value); msg.set_big_shooter(value); msg.set_uwb(value);
+      msg.set_armor(value); msg.set_video_transmission(value); msg.set_capacitor(value);
+      msg.set_main_controller(value);
+      QCOMPARE(OfficialMessageHandler::handle("RobotModuleStatus", bytes(msg), data), OfficialMessageHandler::Result::Parsed);
+      auto snapshot = data.robotModuleStatus();
+      QVERIFY(snapshot.value("received").toBool());
+      QCOMPARE(snapshot.value("robotId").toInt(), 1);
+      for (const char *key : {"power_manager", "rfid", "light_strip", "small_shooter", "big_shooter", "uwb", "armor", "video_transmission", "capacitor", "main_controller"}) {
+        QCOMPARE(snapshot.value(key).toInt(), value);
+        auto *row = findVisual(panel.rootObject(), QStringLiteral("rm27Module_") + QString::fromLatin1(key));
+        QVERIFY(row);
+        const QString expected = value == 0 ? QStringLiteral("0（离线）") : value == 1 ? QStringLiteral("1（在线）") : QStringLiteral("2（安装不规范，视为离线）");
+        QVERIFY(row->property("text").toString().contains(expected));
+      }
+      QVERIFY(!snapshot.contains("modular_42mm"));
+    }
+    QVERIFY(summary->property("text").toString().contains(QStringLiteral("当前权限值: 未收到")));
+    for (int value : {0, 1, 9}) {
+      msg.set_modular_42mm(value);
+      QCOMPARE(OfficialMessageHandler::handle("RobotModuleStatus", bytes(msg), data), OfficialMessageHandler::Result::Parsed);
+      QCOMPARE(data.robotModuleStatus().value("modular_42mm").toInt(), value);
+      const QString expected = value == 0 ? QStringLiteral("0（未拥有）") : value == 1 ? QStringLiteral("1（拥有）") : QStringLiteral("非法值 9");
+      QTRY_VERIFY(summary->property("text").toString().contains(expected));
+      QVERIFY(summary->property("text").toString().contains(value == 9 ? QStringLiteral("已确认: 否") : QStringLiteral("已确认: 是")));
+    }
+    const QVariantMap saved = data.robotModuleStatus();
+    QCOMPARE(OfficialMessageHandler::handle("RobotModuleStatus", QByteArray::fromHex("5880"), data), OfficialMessageHandler::Result::ParseFailed);
+    QCOMPARE(data.robotModuleStatus(), saved);
+    robomaster::Event event; event.set_event_id(16);
+    QCOMPARE(OfficialMessageHandler::handle("Event", bytes(event), data), OfficialMessageHandler::Result::Parsed);
+    QVERIFY(data.event16Received()); QCOMPARE(data.robotModuleStatus(), saved);
+    msg.clear_modular_42mm();
+    QCOMPARE(OfficialMessageHandler::handle("RobotModuleStatus", bytes(msg), data), OfficialMessageHandler::Result::Parsed);
+    QVERIFY(!data.robotModuleStatus().contains("modular_42mm"));
+    QVERIFY(data.event16Received());
+    data.setCurrentRobotId(101);
+    QVERIFY(!data.robotModuleStatus().value("received").toBool());
+    QVERIFY(!data.robotModuleStatus().contains("modular_42mm"));
+    msg.set_modular_42mm(1);
+    QCOMPARE(OfficialMessageHandler::handle("RobotModuleStatus", bytes(msg), data), OfficialMessageHandler::Result::Parsed);
+    QCOMPARE(data.robotModuleStatus().value("robotId").toInt(), 101);
+    data.setCurrentRobotId(3);
+    QCOMPARE(OfficialMessageHandler::handle("RobotModuleStatus", bytes(msg), data), OfficialMessageHandler::Result::Parsed);
+    QVERIFY(summary->property("text").toString().contains(QStringLiteral("已确认: 否")));
+    QVERIFY(summary->property("text").toString().contains(QStringLiteral("不适用（原始值 1）")));
+    data.setCurrentRobotId(2);
+    QCOMPARE(OfficialMessageHandler::handle("RobotModuleStatus", bytes(msg), data), OfficialMessageHandler::Result::Parsed);
+    QVERIFY(!data.robotModuleStatus().value("received").toBool());
+  }
+#ifdef RM_HAS_MQTT
+  void moduleStatusViaLocalMqttOnce() {
+    if (QStandardPaths::findExecutable(QStringLiteral("mosquitto")).isEmpty()) QSKIP("mosquitto unavailable");
+    QTcpServer probe; if (!probe.listen(QHostAddress::LocalHost, 0)) QSKIP("local listening unavailable");
+    const quint16 port = probe.serverPort(); probe.close();
+    QProcess broker; broker.start(QStringLiteral("mosquitto"), {QStringLiteral("-p"), QString::number(port)});
+    QVERIFY(broker.waitForStarted()); QTest::qWait(150);
+    GameData data; data.setCurrentRobotId(1);
+    RM::NetworkManager network(&data);
+    const QString uri = QStringLiteral("tcp://127.0.0.1:%1").arg(port);
+    QSignalSpy connected(&network, &RM::NetworkManager::mqttConnectCompleted);
+    network.startMqtt(uri, QStringLiteral("1"));
+    QTRY_VERIFY_WITH_TIMEOUT(!connected.isEmpty(), 5000); QVERIFY(network.isMqttConnected());
+    MqttManager publisher; QSignalSpy pubConnected(&publisher, &MqttManager::connectCompleted);
+    publisher.connectToBrokerAsync(uri, QStringLiteral("p2b2-test-publisher"));
+    QTRY_VERIFY_WITH_TIMEOUT(!pubConnected.isEmpty(), 5000); QVERIFY(publisher.isConnected());
+    robomaster::RobotModuleStatus msg; msg.set_modular_42mm(1); msg.set_small_shooter(2);
+    QSignalSpy updates(&data, &GameData::moduleListChanged);
+    QVERIFY(publisher.publish(QStringLiteral("RobotModuleStatus"), bytes(msg), 1));
+    QTRY_COMPARE_WITH_TIMEOUT(updates.count(), 1, 5000);
+    QTest::qWait(150); QCOMPARE(updates.count(), 1);
+    QCOMPARE(data.robotModuleStatus().value("modular_42mm").toInt(), 1);
+    data.setCurrentRobotId(101); updates.clear();
+    QVERIFY(publisher.publish(QStringLiteral("RobotModuleStatus"), bytes(msg), 1));
+    QTest::qWait(400); QCOMPARE(updates.count(), 0);
+    QVERIFY(!data.robotModuleStatus().value("received").toBool());
+    network.stopMqtt(); publisher.disconnect(); broker.terminate(); QVERIFY(broker.waitForFinished(5000));
+  }
+#endif
   void supportedMessagesAndLogging() {
     GameData data;
     QSignalSpy fortress(&data, &GameData::allyFortressOccupationAlertTriggered);

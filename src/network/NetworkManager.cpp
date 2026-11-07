@@ -1228,6 +1228,12 @@ void NetworkManager::processMqttMessage(const QString &topic,
   }
   dumpMqttEvent(QStringLiteral("received"), topic, payload, m_gameData);
 
+  if (topic == QLatin1String("RobotModuleStatus") && m_mqttManager &&
+      (!m_mqttManager->isConnected() || m_mqttManager->clientId() != QString::number(m_gameData->getCurrentRobotId()))) {
+    qWarning() << "RobotModuleStatus ignored: MQTT identity does not match current robot";
+    return;
+  }
+
   const auto officialResult = OfficialMessageHandler::handle(
       topic, payload, *m_gameData,
       [&](const QString &detail, const QJsonObject &fields) {
@@ -1241,6 +1247,11 @@ void NetworkManager::processMqttMessage(const QString &topic,
         m_lastMqttPaused = paused;
       });
 
+  if (topic == QLatin1String("RobotModuleStatus") && officialResult == OfficialMessageHandler::Result::ParseFailed) {
+    dumpMqttEvent(QStringLiteral("parse_failed"), topic, payload, m_gameData,
+                  QStringLiteral("RobotModuleStatus parse failed"));
+    qWarning() << "NetworkManager: Failed to parse RobotModuleStatus as protobuf";
+  }
   // 根据 Topic 解析对应的 Protobuf 消息
   if (officialResult != OfficialMessageHandler::Result::Unsupported) {
     // 已由官方消息处理模块处理，仍执行下面的公共收尾。
@@ -1308,22 +1319,6 @@ void NetworkManager::processMqttMessage(const QString &topic,
                       {QStringLiteral("z"), msg.z()},
                       {QStringLiteral("yaw"), msg.yaw()}});
       m_gameData->updateRobotPosition(msg);
-    }
-  } else if (topic == "RobotModuleStatus") {
-    robomaster::RobotModuleStatus msg;
-    if (msg.ParseFromArray(payload.data(), payload.size())) {
-      dumpMqttEvent(
-          QStringLiteral("parsed"), topic, payload, m_gameData,
-          QStringLiteral("RobotModuleStatus main_controller=%1 video=%2")
-              .arg(msg.main_controller())
-              .arg(msg.video_transmission()),
-          QJsonObject{{QStringLiteral("main_controller"),
-                       static_cast<int>(msg.main_controller())},
-                      {QStringLiteral("video_transmission"),
-                       static_cast<int>(msg.video_transmission())},
-                      {QStringLiteral("rfid"), static_cast<int>(msg.rfid())},
-                      {QStringLiteral("uwb"), static_cast<int>(msg.uwb())}});
-      m_gameData->updateRobotModuleStatus(msg);
     }
   } else if (topic == "RuneStatusSync") {
     robomaster::RuneStatusSync msg;

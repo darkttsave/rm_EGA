@@ -186,6 +186,19 @@ OfficialMessageHandler::Result OfficialMessageHandler::handle(
     gameData.updateRobotStaticStatus(msg);
     return Result::Parsed;
   }
+  if (topic == QLatin1String("RobotModuleStatus")) {
+    robomaster::RobotModuleStatus msg;
+    if (!msg.ParseFromArray(payload.data(), payload.size()))
+      return Result::ParseFailed;
+    if (logger)
+      logger(QStringLiteral("RobotModuleStatus current_robot_id=%1 modular_42mm_present=%2")
+                 .arg(gameData.getCurrentRobotId()).arg(msg.has_modular_42mm()),
+             {{QStringLiteral("robot_id"), gameData.getCurrentRobotId()},
+              {QStringLiteral("modular_42mm_present"), msg.has_modular_42mm()},
+              {QStringLiteral("modular_42mm"), static_cast<qint64>(msg.modular_42mm())}});
+    gameData.updateRobotModuleStatus(msg);
+    return Result::Parsed;
+  }
   if (topic == QLatin1String("RobotDynamicStatus")) {
     robomaster::RobotDynamicStatus msg;
     if (!msg.ParseFromArray(payload.data(), payload.size()))

@@ -613,6 +613,11 @@ void GameData::setCurrentRobotId(qint64 robotId) {
   const auto previous = RM::resolveRobotIdentity(m_currentRobotId);
   if (m_currentRobotId == next) return;
   m_currentRobotId = next;
+  m_robotModuleStatusMap.clear();
+  m_robotModuleStatusReceived = false;
+  m_moduleStatus.clear();
+  m_lastModuleOnlineStates.clear();
+  emit moduleListChanged();
   emit myRobotUpdated();
   if (previous.team != RM::resolveRobotIdentity(next).team) {
     emit currentTeamEconomyChanged();
@@ -3907,74 +3912,56 @@ void GameData::updateRobotInjury(const robomaster::RobotInjuryStat &data) {
 }
 
 // === 模块在线状态更新（RobotModuleStatus）MQTT协议处理 ===
+QVariantMap GameData::robotModuleStatus() const {
+  QVariantMap result = m_robotModuleStatusMap;
+  result["received"] = m_robotModuleStatusReceived;
+  result["robotId"] = m_robotModuleStatusReceived ? m_currentRobotId : 0;
+  return result;
+}
+
 void GameData::updateRobotModuleStatus(const robomaster::RobotModuleStatus &data) {
-  // 1. 更新结构化 Map，供 DamagePanel 和 LeftBottomPanel 精确引用
-  m_robotModuleStatusMap["power_manager"] = data.power_manager();
-  m_robotModuleStatusMap["rfid"] = data.rfid();
-  m_robotModuleStatusMap["light_strip"] = data.light_strip();
-  m_robotModuleStatusMap["small_shooter"] = data.small_shooter();
-  m_robotModuleStatusMap["big_shooter"] = data.big_shooter();
-  m_robotModuleStatusMap["uwb"] = data.uwb();
-  m_robotModuleStatusMap["armor"] = data.armor();
-  m_robotModuleStatusMap["video_transmission"] = data.video_transmission();
-  m_robotModuleStatusMap["capacitor"] = data.capacitor();
-  m_robotModuleStatusMap["main_controller"] = data.main_controller();
+  const auto identity = RM::resolveRobotIdentity(m_currentRobotId);
+  if (identity.kind != RM::IdentityKind::Robot || !identity.team) {
+    qWarning() << "RobotModuleStatus ignored: no valid current robot identity";
+    return;
+  }
+  // Each message is a fresh snapshot. Missing optional fields remain unknown.
+  m_robotModuleStatusMap.clear();
+#define COPY_MODULE(field) if (data.has_##field()) m_robotModuleStatusMap[QStringLiteral(#field)] = data.field()
+  COPY_MODULE(power_manager); COPY_MODULE(rfid); COPY_MODULE(light_strip);
+  COPY_MODULE(small_shooter); COPY_MODULE(big_shooter); COPY_MODULE(uwb);
+  COPY_MODULE(armor); COPY_MODULE(video_transmission); COPY_MODULE(capacitor);
+  COPY_MODULE(main_controller); COPY_MODULE(modular_42mm);
+#undef COPY_MODULE
+  m_robotModuleStatusReceived = true;
 
-  //获取当前机器人类型（是否是英雄）
-  const RobotData *currentRobot = getCurrentRobot();
-  const bool isHero = currentRobot && currentRobot->type == RobotType::HERO;
-
-  // 2. 同时维护旧的列表结构，兼容已有的 Repeater 显示
   m_moduleStatus.clear();
-  auto addModule = [&](const QString &name, uint32_t online,
-                       bool notifyOfflineTransition = true) {
-    const bool isOnline = (online == 1);//模块是否在线
-
-    if (notifyOfflineTransition) {
-      const auto previousState = m_lastModuleOnlineStates.constFind(name);//前一次状态
-      const bool firstSeen = previousState == m_lastModuleOnlineStates.constEnd();//是否是第一次出现
-      const bool becameOffline = !firstSeen && previousState.value() && !isOnline;
-      if ((firstSeen && !isOnline) || becameOffline) {
-        addSystemMessage(QStringLiteral("机器人%1模块离线").arg(name),
-                         QStringLiteral("#d52424"));
-      }
-      m_lastModuleOnlineStates.insert(name, isOnline);
+  auto addModule = [&](const QString &name, const char *field, bool notify = true) {
+    const auto it = m_robotModuleStatusMap.constFind(QString::fromLatin1(field));
+    const bool present = it != m_robotModuleStatusMap.constEnd();
+    const bool online = present && it.value().toUInt() == 1;
+    if (notify && present) {
+      const auto previous = m_lastModuleOnlineStates.constFind(name);
+      if ((!online && previous == m_lastModuleOnlineStates.constEnd()) ||
+          (!online && previous != m_lastModuleOnlineStates.constEnd() && previous.value()))
+        addSystemMessage(QStringLiteral("机器人%1模块离线").arg(name), QStringLiteral("#d52424"));
+      m_lastModuleOnlineStates.insert(name, online);
     }
-
-    ModuleStatusData m{};
-    QByteArray nameUtf8 = name.toUtf8();
-    strncpy(m.moduleName, nameUtf8.constData(), sizeof(m.moduleName) - 1);
-    m.moduleName[sizeof(m.moduleName) - 1] = '\0';
-    m.isOnline = isOnline;
-    m_moduleStatus.append(m);
+    ModuleStatusData module{};
+    const QByteArray utf8 = name.toUtf8();
+    strncpy(module.moduleName, utf8.constData(), sizeof(module.moduleName) - 1);
+    module.isOnline = online;
+    m_moduleStatus.append(module);
   };
-
-  // 装甲四块使用同一个在线值（来自 data.armor）
-  addModule("装甲0", data.armor());
-  addModule("装甲1", data.armor());
-  addModule("装甲2", data.armor());
-  addModule("装甲3", data.armor());
-  // 17mm测速（来自 small_shooter）(用发射机构状态)
-  //如果是英雄，则绑定42mm
-  if (isHero) {
-    addModule("42mm测速", data.big_shooter());
-  }
-  else if (currentRobot && currentRobot->type != RobotType::HEAVY) {
-    addModule("17mm测速", data.small_shooter());
-  }
-  // 图传（来自 video_transmission）
-  addModule("图传", data.video_transmission());
-  // RFID（来自 rfid）
-  addModule("RFID", data.rfid());
-  // UWB（来自 uwb）
-  addModule("UWB", data.uwb());
-  // WIFI 暂无真实上报，这里仅用于 UI 占位，不参与离线系统消息。
-  addModule("WIFI", 0, false);
-  // 灯条仅显示一个：灯条0（来自 light_strip）
-  addModule("灯条0", data.light_strip());
-  // 电容（来自 capacitor）
-  addModule("电容", data.capacitor());
-
+  for (int i = 0; i < 4; ++i) addModule(QStringLiteral("装甲%1").arg(i), "armor");
+  if (data.has_small_shooter()) addModule(QStringLiteral("17mm测速"), "small_shooter");
+  if (data.has_big_shooter()) addModule(QStringLiteral("42mm测速"), "big_shooter");
+  addModule(QStringLiteral("图传"), "video_transmission");
+  addModule(QStringLiteral("RFID"), "rfid");
+  addModule(QStringLiteral("UWB"), "uwb");
+  addModule(QStringLiteral("WIFI"), "wifi", false);
+  addModule(QStringLiteral("灯条0"), "light_strip");
+  addModule(QStringLiteral("电容"), "capacitor");
   emit moduleListChanged();
   emitDataChanged();
 }

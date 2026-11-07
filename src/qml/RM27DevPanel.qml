@@ -69,6 +69,35 @@ Rectangle {
                     text: (robot.identityTeam || "未知阵营") + " " + (robot.identityName || "未知") + " (ID " + modelData + ")    血量: " + (robot.hp === undefined ? "未知" : robot.hp + "/" + robot.maxHp) + "    离线: " + (robot.isOffline === undefined ? "未知" : robot.isOffline)
                 }
             }
+            Text { text: "机器人模块状态（当前身份）"; color: "#8de0ff"; font.pixelSize: 21; topPadding: 12 }
+            Text {
+                objectName: "rm27ModuleSummary"
+                property var snapshot: root.dataSource ? root.dataSource.robotModuleStatus : ({})
+                color: "white"; font.pixelSize: 18; width: parent.width; wrapMode: Text.Wrap
+                text: "模块状态已收到: " + (snapshot.received ? "是（机器人 ID " + snapshot.robotId + "）" : "否") +
+                      "\n42mm 安装权限已确认: " + (snapshot.received && (snapshot.robotId === 1 || snapshot.robotId === 101) && snapshot.modular_42mm !== undefined && snapshot.modular_42mm <= 1 ? "是" : "否") +
+                      "    当前权限值: " + (!snapshot.received || snapshot.modular_42mm === undefined ? "未收到" :
+                          snapshot.robotId !== 1 && snapshot.robotId !== 101 ? "不适用（原始值 " + snapshot.modular_42mm + "）" :
+                          snapshot.modular_42mm === 0 ? "0（未拥有）" : snapshot.modular_42mm === 1 ? "1（拥有）" : "非法值 " + snapshot.modular_42mm) +
+                      "（仅适用于重装；不代表已安装或可射击）"
+            }
+            Repeater {
+                model: [
+                    {key:"power_manager", name:"电源管理"}, {key:"rfid", name:"RFID"},
+                    {key:"light_strip", name:"灯条"}, {key:"small_shooter", name:"17mm 测速"},
+                    {key:"big_shooter", name:"42mm 测速"}, {key:"uwb", name:"定位"},
+                    {key:"armor", name:"装甲"}, {key:"video_transmission", name:"图传"},
+                    {key:"capacitor", name:"电容"}, {key:"main_controller", name:"主控"}
+                ]
+                delegate: Text {
+                    required property var modelData
+                    property var snapshot: root.dataSource ? root.dataSource.robotModuleStatus : ({})
+                    property var value: snapshot[modelData.key]
+                    objectName: "rm27Module_" + modelData.key
+                    color: "white"; font.pixelSize: 18
+                    text: modelData.name + ": " + (value === undefined ? "未收到" : value === 0 ? "0（离线）" : value === 1 ? "1（在线）" : value === 2 ? "2（安装不规范，视为离线）" : "非法值 " + value)
+                }
+            }
             Text { text: "RMUL 装配事件观测"; color: "#8de0ff"; font.pixelSize: 21; topPadding: 12 }
             Text {
                 objectName: "rm27Event16Status"

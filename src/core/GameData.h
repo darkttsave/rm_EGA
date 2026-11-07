@@ -696,6 +696,8 @@ Q_PROPERTY(QVariantMap robotRespawnStatus READ robotRespawnStatus NOTIFY robotRe
   Q_PROPERTY(bool siloOnline READ siloOnline NOTIFY siloStatusChanged)
 
 
+  Q_PROPERTY(QVariantMap robotModuleStatus READ robotModuleStatus NOTIFY moduleListChanged)
+
   // Observation of Event 16 only; this is not the current installation state.
   Q_PROPERTY(bool event16Received READ event16Received NOTIFY event16ReceivedChanged)
   Q_PROPERTY(QDateTime event16LastReceivedAt READ event16LastReceivedAt NOTIFY event16ReceivedChanged)
@@ -714,6 +716,7 @@ public:
   explicit GameData(QObject *parent = nullptr);
   ~GameData();
 
+  QVariantMap robotModuleStatus() const;
   bool event16Received() const { return m_event16LastReceivedAt.isValid(); }
   QDateTime event16LastReceivedAt() const { return m_event16LastReceivedAt; }
 
@@ -1420,7 +1423,8 @@ private:
   SentryStatusData m_blueSentry;
   SentryPathData m_allySentryPath;      //己方哨兵路径规划
   QList<ModuleStatusData> m_moduleStatus;//用于顺序存储~按键所需的模块
-  QVariantMap m_robotModuleStatusMap; // 核心模块状态映射 (字段名 -> 0/1)（统一管理）
+  QVariantMap m_robotModuleStatusMap; // 当前身份的最近一次模块状态及字段 presence
+  bool m_robotModuleStatusReceived = false;
   QMap<QString, bool> m_lastModuleOnlineStates; // 模块上次在线态，用于离线消息去重
 
   // 伤害统计数据
