@@ -1220,6 +1220,10 @@ bool NetworkManager::isMqttConnected() const {
   return m_mqttManager && m_mqttManager->isConnected();
 }
 
+QString NetworkManager::mqttBrokerUri() const {
+  return m_mqttManager ? m_mqttManager->serverUri() : QString();
+}
+
 void NetworkManager::subscribeToTopics() {
   if (!m_mqttManager)
     return;

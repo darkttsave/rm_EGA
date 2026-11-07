@@ -170,6 +170,7 @@ public:
    * @brief 检查 MQTT 是否已连接
    */
   bool isMqttConnected() const;
+  QString mqttBrokerUri() const;
 #endif
 
   // --- 数据发送 ---

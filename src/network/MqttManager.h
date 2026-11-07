@@ -80,6 +80,9 @@ public:
    */
   bool isConnected() const;
 
+  // The URI last passed to this MQTT client, not a configuration fallback.
+  QString serverUri() const { return m_serverUri; }
+
   /**
    * @brief 订阅主题
    * @param topic 主题名称（如 "GameStatus"）

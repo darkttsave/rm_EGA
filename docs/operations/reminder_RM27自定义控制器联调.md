@@ -11,7 +11,7 @@
 > | --- | --- | --- |
 > | 软件模拟 | 串口解析、30B 透明转发、QoS 0 发布、共享限频、失败日志、本机 Broker 链路 | **已通过**（Task 8-J 软件验收 PASS；`TestCustomControllerMqtt` 连续 15/15） |
 > | 官方视频图传 | 主 HEVC / 辅助 H.264 图传接收与解码（既有图传工作线） | **已完成**（本分支未改动图传代码，沿用既有验证结论） |
-> | 官方 MQTT 接入 | 真实官方 Broker、机器人身份与权限 | **待实机联调** |
+> | 官方 MQTT 接入 | 真实官方 Broker、机器人身份与权限 | **已连接**；现场抓到客户端发送的相关 TCP 数据，Broker 处理与身份权限仍需核验 |
 > | 控制下行 `0x0311` | 图传发送端 → C 板接收、超时停控、机械臂动作 | **待电控/实机联调** |
 
 ---
@@ -150,7 +150,7 @@ env -u http_proxy -u https_proxy -u all_proxy \
 | 阶段 | 验证内容 | 通过标准 | 当前状态 |
 | --- | --- | --- | --- |
 | A | 软件模拟：串口→MQTT 透明转发 | 30B 逐字节一致、QoS 0 发布、限频与失败日志正常 | **已通过**（Task 8-J） |
-| B | 客户端连接官方 MQTT Broker | 连接成功，`CustomControl` Topic 有 PUBLISH | 待实机 |
+| B | 客户端连接官方 MQTT Broker | 连接成功，`CustomControl` Topic 有 PUBLISH | 已连接并抓到相关 TCP 数据；待核验 Broker 处理 |
 | C | 图传发送端 → C 板控制下行 | C 板收到 `cmd_id=0x0311`、30B、CRC 正确 | 待电控/实机 |
 | D | 执行机构与安全行为 | 断链超时停控、恢复只用新帧、机械臂动作符合预期 | 待实机 |
 
@@ -195,25 +195,40 @@ lsof <实际串口路径>
 
 **方式一：Wireshark（Windows）确认 MQTT PUBLISH**
 
-官方 MQTT 为明文 MQTT 3.1.1（`tcp://`，端口 3333），可直接解析：
+以下为本次现场实例：Windows 官方选手端 `192.168.12.1`、Ubuntu 自定义终端
+`192.168.12.2`、MQTT TCP 端口 `3333`，Topic 为 `CustomControl`。IP 和端口以实际网络为准。
 
-1. 抓包位置（三选一）：
-   - 交换机支持端口镜像：Windows 接镜像口，Wireshark 选对应网卡；
-   - 推荐：在 NUC 上抓包后拷到 Windows 打开：
-     ```bash
-     sudo tcpdump -i <官方接口网卡> -s 0 -w customcontrol.pcap 'tcp port 3333'
-     ```
-     操作控制器几秒后停止抓包，把 `customcontrol.pcap` 拷到 Windows，用 Wireshark 打开；
-   - Wireshark 远程抓包（SSH remote capture）直接抓 NUC 网卡。
-2. 过滤与检查：
-   - 显示过滤器：`tcp.port == 3333 && mqtt`；
-   - 更进一步：`mqtt.topic == "CustomControl"`（或 `mqtt.msgtype == 3` 只看 PUBLISH）；
-   - 展开 `MQTT Publish Message`：Topic name 应为 `CustomControl`；Payload 长度应为
-     **32 字节**（2 字节 Protobuf 前缀 `0A 1E` + 30 字节原始 Payload）；10B 前哨站消息为
-     12 字节（`0A 0A` + 10 字节）。
-   - 复制 Payload 的 Hex Dump，与控制器实际发送的 30B 逐字节比对。
-3. 注意：抓包仅用于联调排障，需赛事环境授权；不要在正式比赛期间长时间抓包；原始抓包和
-   现场 IP/主机名不得提交仓库或外传。
+1. 在 Windows Wireshark 中选择与 Ubuntu 通信的以太网网卡并开始抓包，显示过滤器输入
+   `tcp.port == 3333`。建议**先抓包、再启动客户端**，以观察 CONNECT / CONNACK。
+2. Wireshark 能识别 MQTT 时，使用 `mqtt.msgtype == 2` 找到 CONNACK，检查返回码为 `0`。
+   不能识别时可查看原始 TCP Payload；普通 TCP ACK 不是 MQTT CONNACK，也不是应用接收确认。
+3. 查找本次实测可用的显示过滤器：
+
+   ```text
+   ip.src == 192.168.12.2 && tcp.dstport == 3333 && tcp contains "CustomControl"
+   ```
+
+   操作控制器时应持续出现匹配数据包；核对源 IP 为 Ubuntu、目的 IP 为 Windows。
+   `CustomControl` 是 MQTT Topic。能识别 MQTT 时也可使用 `mqtt.topic == "CustomControl"`
+   或 `mqtt.msgtype == 3` 查找 PUBLISH，展开报文检查 QoS、Topic 和 Payload。
+4. 控制器原始数据为 30B，对应 Protobuf Payload 通常是 `0A 1E` + 30B，共 32B；10B 前哨站
+   Payload 为 `0A 0A` + 10B。单条 30B 控制器数据的 QoS 0 MQTT PUBLISH 通常为 49B：
+   MQTT 固定头 2B + Topic 长度字段 2B + `CustomControl` 名称 13B + Protobuf 头 2B + 原始
+   数据 30B。将原始 30B 与控制器发送端逐字节比较。
+5. **不要只凭 TCP Length 判断**：TCP 可能合并或拆分 MQTT 报文，过滤器也可能漏掉 Topic 被
+   拆分的片段。应结合 Topic、完整 MQTT 报文结构和 Payload 验证。无法识别 MQTT 时，可用
+   `tcp contains "CustomControl"` 查找，在 TCP 数据区查看十六进制，并用 Follow TCP Stream
+   查看完整通信；必要时保存 pcapng 供授权工具离线解析。
+
+若 Windows 无法直接抓到链路，也可在 Ubuntu 网卡用
+`sudo tcpdump -i <官方接口网卡> -s 0 -w customcontrol.pcap 'tcp port 3333'` 抓包，或使用
+Wireshark 的 SSH 远程抓包；将抓包文件按现场授权方式在 Windows 打开。
+
+判定时区分：① 本机 MQTT publish 接口接受；② Windows 网络接口抓到 MQTT PUBLISH；
+③ 官方 Broker 处理消息；④ C 板收到 `0x0311`。本次现场已有前两项的相关证据，抓包
+本身不能证明 Broker 已处理，更不能证明 C 板已接收；C 板接收仍待验证。
+
+抓包仅用于授权联调排障；原始抓包和现场 IP/主机名不得提交仓库或擅自外传。
 
 **方式二：本地订阅端（仅本机模拟环境）**
 

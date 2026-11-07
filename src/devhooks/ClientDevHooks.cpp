@@ -17,7 +17,6 @@
 #include <QDir>
 #include <QEvent>
 #include <QFileInfo>
-#include <QHttpHeaders>
 #include <QHttpServer>
 #include <QHttpServerRequest>
 #include <QHttpServerResponse>
@@ -26,19 +25,22 @@
 #include <QTcpServer>
 #include <QWidget>
 #include <QtGlobal>
+#include <type_traits>
 
 namespace {
 
+template <typename Server>
+bool bindHttpServer(Server *server, QTcpServer *tcpServer) {
+  if constexpr (std::is_void_v<decltype(server->bind(tcpServer))>) {
+    server->bind(tcpServer);
+    return true; // Qt 6.4/6.5 bind returns void; listen was checked already.
+  } else {
+    return server->bind(tcpServer);
+  }
+}
+
 QHttpServerResponse jsonResponse(const QJsonObject &obj, int statusCode = 200) {
-  const QByteArray data =
-      QJsonDocument(obj).toJson(QJsonDocument::Compact);
-  QHttpServerResponse response(
-      data, QHttpServerResponder::StatusCode(statusCode));
-  QHttpHeaders headers;
-  headers.append(QHttpHeaders::WellKnownHeader::ContentType,
-                 "application/json");
-  response.setHeaders(headers);
-  return response;
+  return QHttpServerResponse(obj, QHttpServerResponder::StatusCode(statusCode));
 }
 
 QHttpServerResponse jsonError(const QString &message, int statusCode = 400) {
@@ -123,7 +125,7 @@ bool ClientDevHooks::start() {
     return false;
   }
 
-  if (!m_httpServer->bind(tcpServer)) {
+  if (!bindHttpServer(m_httpServer, tcpServer)) {
     qWarning() << "[ClientDevHooks] Failed to bind HTTP server";
     delete tcpServer;
     return false;
@@ -284,6 +286,25 @@ QJsonObject ClientDevHooks::collectNetworkState() const {
     keyboardMouse["keyboard_value"] =
         static_cast<int>(m_networkManager->lastKeyboardMouseKeyboardValue());
     networkState["keyboard_mouse_control"] = keyboardMouse;
+    const auto controller = m_networkManager->customControlControllerStats();
+    const auto outpost = m_networkManager->customControlOutpostStats();
+    QJsonObject customControl;
+    customControl["controller"] = QJsonObject{
+        {"published", static_cast<qint64>(controller.published)},
+        {"dropped", static_cast<qint64>(controller.dropped)}};
+    customControl["outpost"] = QJsonObject{
+        {"published", static_cast<qint64>(outpost.published)},
+        {"dropped", static_cast<qint64>(outpost.dropped)}};
+#ifdef RM_HAS_MQTT
+    customControl["mqtt_connected"] = m_networkManager->isMqttConnected();
+    const QString broker = m_networkManager->mqttBrokerUri();
+    customControl["broker"] = broker.isEmpty() ? QJsonValue(QJsonValue::Null)
+                                               : QJsonValue(broker);
+#else
+    customControl["mqtt_connected"] = false;
+    customControl["broker"] = QJsonValue(QJsonValue::Null);
+#endif
+    networkState["custom_control"] = customControl;
   }
   return networkState;
 }

@@ -60,6 +60,16 @@ target_link_libraries(test_custom_controller_parser PRIVATE
     Qt6::Core Qt6::Test RoboMasterClientLib)
 rm26_add_qt_test(TestCustomControllerParser test_custom_controller_parser)
 
+if(RM26_ENABLE_DEVTOOLS)
+    add_executable(test_mqtt_tx_devhooks unit/test_mqtt_tx_devhooks.cpp)
+    target_link_libraries(test_mqtt_tx_devhooks PRIVATE
+        Qt6::Core Qt6::Widgets Qt6::Network Qt6::Test RoboMasterClientLib)
+    target_compile_definitions(test_mqtt_tx_devhooks PRIVATE
+        RM_PROJECT_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+    rm26_add_qt_test(TestMqttTxDevHooks test_mqtt_tx_devhooks)
+    set_property(TEST TestMqttTxDevHooks APPEND PROPERTY ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+endif()
+
 if(UNIX AND NOT APPLE AND PAHO_MQTT_FOUND)
     add_executable(test_custom_controller_mqtt unit/test_custom_controller_mqtt.cpp)
     target_link_libraries(test_custom_controller_mqtt PRIVATE
