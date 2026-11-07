@@ -532,10 +532,12 @@ private slots:
     QSignalSpy received(&network, &RM::NetworkManager::dataReceived);
     robomaster::Event evt; evt.set_event_id(8); evt.set_param("RED");
     network.processMqttMessage("Event", bytes(evt));
-    QCOMPARE(signal.count(), 1); QCOMPARE(popup.count(), 1);
+    QCOMPARE(signal.count(), 0); QCOMPARE(popup.count(), 0);
+    QCOMPARE(data.lastEventObservation().value("eventId").toInt(), 8);
+    QCOMPARE(data.lastEventObservation().value("param").toString(), QStringLiteral("RED"));
     QCOMPARE(received.count(), 1);
     network.processMqttMessage("Event", QByteArray::fromHex("0880"));
-    QCOMPARE(signal.count(), 1); QCOMPARE(popup.count(), 1);
+    QCOMPARE(signal.count(), 0); QCOMPARE(popup.count(), 0);
     QCOMPARE(received.count(), 2);
   }
   void networkCacheLogisticsAndUdpPriority() {
@@ -577,7 +579,7 @@ private slots:
     QVERIFY(data.is_paused());
   }
 #endif
-  void legacyEventDispatchOnce() {
+  void conflictingEventRetainsRawData() {
     GameData data;
     QSignalSpy air(&data, &GameData::airSupportCountered);
     QSignalSpy popup(&data, &GameData::officialEventPopupRequested);
@@ -590,9 +592,45 @@ private slots:
     };
     robomaster::Event evt; evt.set_event_id(8); evt.set_param("RED");
     QCOMPARE(OfficialMessageHandler::handle("Event", bytes(evt), data, logger), OfficialMessageHandler::Result::Parsed);
-    QCOMPARE(logs, 1); QCOMPARE(air.count(), 1); QCOMPARE(popup.count(), 1);
+    QCOMPARE(logs, 1); QCOMPARE(air.count(), 0); QCOMPARE(popup.count(), 0);
     QCOMPARE(OfficialMessageHandler::handle("Event", QByteArray::fromHex("0880"), data, logger), OfficialMessageHandler::Result::ParseFailed);
-    QCOMPARE(logs, 1); QCOMPARE(air.count(), 1); QCOMPARE(popup.count(), 1);
+    QCOMPARE(logs, 1); QCOMPARE(air.count(), 0); QCOMPARE(popup.count(), 0);
+  }
+  void conflictingEventsHaveNoLegacyEffects() {
+    Q_INIT_RESOURCE(qml);
+    Q_INIT_RESOURCE(resources);
+    GameData data;
+    QSignalSpy raw(&data, &GameData::lastEventObservationChanged);
+    QSignalSpy message(&data, &GameData::systemMessageReceived);
+    QSignalSpy popup(&data, &GameData::officialEventPopupRequested);
+    QSignalSpy started(&data, &GameData::airSupportStarted);
+    QSignalSpy countered(&data, &GameData::airSupportCountered);
+    QQuickWidget panel;
+    panel.rootContext()->setContextProperty("gameData", &data);
+    panel.setSource(QUrl(QStringLiteral("qrc:/qml/RM27DevPanel.qml")));
+    QCOMPARE(panel.status(), QQuickWidget::Ready);
+    QObject *display = panel.rootObject()->findChild<QObject *>("rm27LastEventObservation");
+    QVERIFY(display);
+    for (int id : {5, 6, 7, 8, 14, 15}) {
+      robomaster::Event event; event.set_event_id(id); event.set_param(" 2 ");
+      int logged = 0;
+      auto logger = [&](const QString &, const QJsonObject &fields) {
+        ++logged; QCOMPARE(fields.value("event_id").toInt(), id);
+        QCOMPARE(fields.value("param").toString(), QStringLiteral(" 2 "));
+      };
+      QCOMPARE(OfficialMessageHandler::handle("Event", bytes(event), data, logger), OfficialMessageHandler::Result::Parsed);
+      QCOMPARE(logged, 1);
+      QCOMPARE(data.lastEventObservation().value("eventId").toInt(), id);
+      QCOMPARE(data.lastEventObservation().value("param").toString(), QStringLiteral(" 2 "));
+      QVERIFY(display->property("text").toString().contains(QString::number(id)));
+      data.eventInfo(event); // Public direct caller must not restore old effects.
+    }
+    QCOMPARE(raw.count(), 6);
+    QCOMPARE(message.count(), 0); QCOMPARE(popup.count(), 0);
+    QCOMPARE(started.count(), 0); QCOMPARE(countered.count(), 0);
+    const auto last = data.lastEventObservation();
+    QCOMPARE(OfficialMessageHandler::handle("Event", QByteArray::fromHex("0880"), data), OfficialMessageHandler::Result::ParseFailed);
+    QCOMPARE(data.lastEventObservation(), last);
   }
   void event16Observation() {
     GameData data;
@@ -690,6 +728,18 @@ private slots:
       QCOMPARE(data.getRobotById(ids[i])->currentHP, 101 + i);
     QSignalSpy kills(&data, &GameData::killEventOccurred);
     QSignalSpy popups(&data, &GameData::officialEventPopupRequested);
+    QSignalSpy rawEvents(&data, &GameData::lastEventObservationChanged);
+    QSignalSpy legacyAir(&data, &GameData::airSupportCountered);
+    QSignalSpy legacyMessages(&data, &GameData::systemMessageReceived);
+    for (int id : {5, 6, 7, 8, 14, 15}) {
+      robomaster::Event rawEvent; rawEvent.set_event_id(id); rawEvent.set_param("2");
+      const int expected = rawEvents.count() + 1;
+      QVERIFY(publisher.publish(QStringLiteral("Event"), bytes(rawEvent), 1));
+      QTRY_COMPARE_WITH_TIMEOUT(rawEvents.count(), expected, 5000);
+      QCOMPARE(data.lastEventObservation().value("eventId").toInt(), id);
+      QCOMPARE(data.lastEventObservation().value("param").toString(), QStringLiteral("2"));
+    }
+    QCOMPARE(popups.count(), 0); QCOMPARE(legacyAir.count(), 0); QCOMPARE(legacyMessages.count(), 0);
     robomaster::Event kill;
     kill.set_event_id(1);
     kill.set_param("1,101");

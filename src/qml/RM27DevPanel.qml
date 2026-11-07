@@ -81,6 +81,13 @@ Rectangle {
                       "    最大底盘能量: " + numberValue("max_chassis_energy", 0) +
                       "\n缺失或非法字段不会覆盖上次有效值；上报值不代表安装状态。"
             }
+            Text {
+                objectName: "rm27LastEventObservation"
+                property var event: root.dataSource ? root.dataSource.lastEventObservation : ({})
+                text: event.eventId === undefined ? "最近原始事件：未收到" :
+                      "最近原始事件：ID " + event.eventId + "，参数 " + event.param
+                color: "white"; font.pixelSize: 18; wrapMode: Text.Wrap; width: parent.width
+            }
             Text { text: "当前机器人动态状态（官方消息观测）"; color: "#8de0ff"; font.pixelSize: 21; topPadding: 10 }
             Text {
                 objectName: "rm27DynamicSummary"

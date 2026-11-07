@@ -937,24 +937,32 @@ private slots:
              RM::Dart::kOcclusionFixedHit1);
   }
 
-  void testEvent8AirSupportCounteredEmitsSoundSelector() {
-    GameData gameData;
-    QSignalSpy soundSpy(&gameData, &GameData::airSupportCountered);
-    QSignalSpy systemSpy(&gameData, &GameData::systemMessageReceived);
-
-    robomaster::RoboMasterMessage message;
-    auto *event = message.mutable_event();
-    event->set_event_id(8);
-    event->set_param("2");
-
-    gameData.processProtocolData(message);
-
-    QCOMPARE(soundSpy.count(), 1);
-    QCOMPARE(soundSpy.takeFirst().at(0).toString(),
-             QStringLiteral("2"));
-    QCOMPARE(systemSpy.count(), 1);
-    QCOMPARE(systemSpy.takeFirst().at(0).toString(),
-             QStringLiteral("7:00 对方空中支援被反制，己方剩余可反制次数 2"));
+  void testOldPeriodicRewardsAreNotEmitted() {
+    GameData data;
+    QSignalSpy messages(&data, &GameData::systemMessageReceived);
+    const int checkpoints[] = {419, 359, 299, 239, 179, 119, 59};
+    robomaster::GameStatus status;
+    status.set_current_stage(robomaster::GameStage::STAGE_BATTLE);
+    status.set_current_round(1);
+    status.set_stage_countdown_sec(420);
+    data.updateGameStatus(status);
+    for (int time : checkpoints) {
+      status.set_stage_countdown_sec(time);
+      data.updateGameStatus(status);
+      QCOMPARE(data.getGameTime(), time);
+    }
+    robomaster::GameInfo info;
+    info.set_stage(robomaster::GameStage::STAGE_BATTLE);
+    info.set_time_remaining(420); data.updateGameState(info);
+    info.set_time_remaining(359); data.updateGameState(info);
+    QCOMPARE(data.getGameTime(), 359);
+    data.updateGameStateFromS1(static_cast<int>(robomaster::GameStage::STAGE_BATTLE), 420, 0, 0, 1, false);
+    data.updateGameStateFromS1(static_cast<int>(robomaster::GameStage::STAGE_BATTLE), 299, 0, 0, 1, false);
+    QCOMPARE(data.getGameTime(), 299);
+    for (const auto &args : messages) {
+      const QString text = args.at(0).toString();
+      QVERIFY2(!text.contains(QStringLiteral("金币")) && !text.contains(QStringLiteral("空中")), qPrintable(text));
+    }
   }
 
   void testAirSupportLaserTargetingUsesStateEdges() {

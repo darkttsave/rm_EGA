@@ -55,41 +55,6 @@ QString dartTargetName(int targetId) {
   }
 }
 
-QString assemblyResultText(int resultCode) {
-  switch (resultCode) {
-  case 0:
-    return QStringLiteral("装配成功");
-  case 1:
-    return QStringLiteral("能量单元拔出，装配失败");
-  case 2:
-    return QStringLiteral("装配超时，装配失败");
-  case 3:
-    return QStringLiteral("离开装配区过久，装配失败");
-  case 4:
-    return QStringLiteral("工程战亡，装配失败");
-  case 5:
-    return QStringLiteral("四级难度未满足完成协作时限，装配失败");
-  case 6:
-    return QStringLiteral("主动退出装配，装配失败");
-  case 7:
-    return QStringLiteral("装配完成但未检测到能量单元");
-  case 8:
-    return QStringLiteral("缓冲期到期，装配流程强制结束");
-  default:
-    return QStringLiteral("装配结果未知");
-  }
-}
-
-QString airSupportCounteredText(const QString &param) {
-  bool ok = false;
-  const int remainingCounterCount = param.toInt(&ok);
-  if (ok) {
-    return QStringLiteral("对方空中支援被反制，己方剩余可反制次数 %1")
-        .arg(remainingCounterCount);
-  }
-  return QStringLiteral("对方空中支援被反制");
-}
-
 QString normalizedSystemMessageColor(const QString &color) {
   static const QString kDefaultColor = QStringLiteral("#E5E5E5");
   if (color.isEmpty()) {
@@ -327,24 +292,6 @@ QString officialEventPopupMessageForEvent(const robomaster::Event &data,
         .arg(teamText(currentTeam), resolvedRuneType == 0 ? QStringLiteral("小")
                                                          : QStringLiteral("大"));
   }
-  case 5:
-    return QStringLiteral("己方英雄累计造成狙击伤害 %1").arg(param);
-  case 6:
-    return QStringLiteral("对方英雄累计造成狙击伤害 %1").arg(param);
-  case 7: {
-    if (param.compare("RED", Qt::CaseInsensitive) == 0) {
-      return QStringLiteral("红方呼叫了空中支援");
-    }
-    if (param.compare("BLUE", Qt::CaseInsensitive) == 0) {
-      return QStringLiteral("蓝方呼叫了空中支援");
-    }
-    if (param.isEmpty()) {
-      return QStringLiteral("对方呼叫了空中支援");
-    }
-    return QStringLiteral("空中支援事件");
-  }
-  case 8:
-    return airSupportCounteredText(param);
   case 9: {
     QString normalizedParam = param;
     normalizedParam.replace(QStringLiteral("，"), QStringLiteral(","));
@@ -368,16 +315,6 @@ QString officialEventPopupMessageForEvent(const robomaster::Event &data,
     return QStringLiteral("对方前哨站停转");
   case 13:
     return QStringLiteral("对方基地护甲展开");
-  case 14:
-    return QStringLiteral("对方请求四级装配，进入强制退出缓冲期");
-  case 15: {
-    bool ok = false;
-    const int result = param.toInt(&ok);
-    if (ok) {
-      return QStringLiteral("装配结果：%1").arg(assemblyResultText(result));
-    }
-    return QStringLiteral("装配流程状态更新");
-  }
   case 100:
     return param.isEmpty() ? QStringLiteral("自定义事件通知") : param;
   case 2000:
@@ -2301,46 +2238,6 @@ void GameData::eventInfo(const robomaster::Event &data) {
       emit runeActived(m_runeData.type,m_runeData.status);
       break;
   }
-  case 5:
-      addSystemMessage(QStringLiteral("己方英雄累计造成狙击伤害 %1").arg(param),
-                       "#60D8B7");
-      break;
-  case 6:
-      addSystemMessage(QStringLiteral("对方英雄累计造成狙击伤害 %1").arg(param),
-                       "#d52424");
-      break;
-  case 7: {
-      const QString p = param;
-      const RobotData *currentRobot = getCurrentRobot();
-      const bool myIsRed = currentRobot ? (currentRobot->team == TeamColor::RED) : true;
-      bool enemyTeamKnown = false;
-      bool enemyTeamIsRed = false;
-
-      if (p.isEmpty()) {
-          enemyTeamKnown = true;
-          enemyTeamIsRed = !myIsRed;
-      } else if (p.compare("RED", Qt::CaseInsensitive) == 0) {
-          enemyTeamKnown = true;
-          enemyTeamIsRed = true;
-      } else if (p.compare("BLUE", Qt::CaseInsensitive) == 0) {
-          enemyTeamKnown = true;
-          enemyTeamIsRed = false;
-      }
-
-      if (enemyTeamKnown && enemyTeamIsRed != myIsRed) {
-          emit airSupportStarted(enemyTeamIsRed);
-      }
-      addSystemMessage(QStringLiteral("对方呼叫了空中支援"), "#d52424");
-      break;
-  }
-  case 8:{
-    // 对方空中支援被反制。
-    // 这里透传协议 param，后续如需按不同反制类型/阶段切换音效，
-    // 只改 UI 层映射表即可，不必再动协议分发逻辑。
-    emit airSupportCountered(param);
-    addSystemMessage(airSupportCounteredText(param), "#17dd56");
-    break;
-  }
   case 9: {
       const QString normalizedParam =
           QString(param).replace(QStringLiteral("，"), QStringLiteral(","));
@@ -2750,8 +2647,6 @@ void GameData::applyOfficialGameStateSnapshot(GameStage stage,
       m_systemMessages.clear();
       emit systemMessagesChanged();
     }
-    m_lastPeriodicRewardNotifyTime = -1;
-    m_lastPeriodicAirSupportNotifyTime = -1;
   }
 
   if (shouldResetDartHits) {
@@ -2830,8 +2725,6 @@ void GameData::applyOfficialGameStateSnapshot(GameStage stage,
     m_gameState.gameEnded = false;
     m_hasBattleScoreBaseline = false;
     m_battleScoreBaselineRound = 0;
-    m_lastPeriodicRewardNotifyTime = -1;
-    m_lastPeriodicAirSupportNotifyTime = -1;
     break;
   case GameStage::SETTLEMENT:
     m_gameState.gameStarted = false;
@@ -2958,70 +2851,11 @@ int GameData::blueRoundScoreDelta() const {
   return roundScoreDelta(false);
 }
 
-void GameData::notifyPeriodicRewards(GameStage previousStage,
-                                     int previousGameTime) {
-  //定义"定时奖励检查点"结构：比赛剩余多少时间时，获得多少金币和空中支援时间
-  struct PeriodicRewardCheckpoint {
-    int timeRemaining;
-    int goldReward;
-    int airSupportSeconds;
-  };
-
-  //根据规则设置的硬编码
-  static constexpr PeriodicRewardCheckpoint kPeriodicRewardCheckpoints[] = {
-      {419, 400, 30}, {359, 50, 20}, {299, 50, 20}, {239, 50, 20},
-      {179, 50, 20}, {119, 50, 20},{59, 150, 20}};
-
-  const GameStage currentStage = m_gameState.gameProgress;
-  const int currentGameTime = m_gameState.gameTime;
-  //判断当前是否属于刚进入比赛
-  const bool enteredBattle =
-      !isBattleStage(previousStage) && isBattleStage(currentStage);
-
-  //当前不在比赛阶段，直接返回
-  if (!isBattleStage(currentStage)) {
-    return;
-  }
-
-  //并不是刚进入比赛，直接返回
-  if (previousGameTime == currentGameTime && !enteredBattle) {
-    return;
-  }
-  //遍历检查奖励点
-  for (const auto &checkpoint : kPeriodicRewardCheckpoints) {
-    const bool crossedCheckpoint =
-        previousGameTime > checkpoint.timeRemaining &&
-        currentGameTime <= checkpoint.timeRemaining;//是否跨越了奖励点
-    const bool hitBattleEntryCheckpoint =
-        enteredBattle && currentGameTime == checkpoint.timeRemaining;//特殊处理刚进入比赛阶段
-    if (!crossedCheckpoint && !hitBattleEntryCheckpoint) {
-      continue;
-    }
-
-    if (m_lastPeriodicAirSupportNotifyTime != checkpoint.timeRemaining) {
-      addSystemMessage(
-          QStringLiteral("空中机器人获得%1秒空中支援时间")
-              .arg(checkpoint.airSupportSeconds),
-          QStringLiteral("#FFFFFF"));
-      m_lastPeriodicAirSupportNotifyTime = checkpoint.timeRemaining;
-    }
-
-    if (m_lastPeriodicRewardNotifyTime != checkpoint.timeRemaining) {
-      addSystemMessage(QStringLiteral("获得%1金币")
-                           .arg(checkpoint.goldReward),
-                       QStringLiteral("#FFFFFF"));
-      m_lastPeriodicRewardNotifyTime = checkpoint.timeRemaining;
-    }
-  }
-}
-
 /**
  * @brief 更新比赛状态
  * @param data Protobuf 格式的比赛信息消息
  */
 void GameData::updateGameState(const robomaster::GameInfo &data) {
-  const GameStage previousStage = m_gameState.gameProgress;
-  const int previousGameTime = m_gameState.gameTime;  //更新前比赛剩余时间
   const bool economyChanged =
       (m_redEconomy != static_cast<int>(data.red_economy()) ||
        m_blueEconomy != static_cast<int>(data.blue_economy()));
@@ -3039,12 +2873,9 @@ void GameData::updateGameState(const robomaster::GameInfo &data) {
                                  static_cast<quint16>(data.blue_score()),
                                  static_cast<quint8>(data.current_round()),
                                  data.is_paused());
-  notifyPeriodicRewards(previousStage, previousGameTime);
 }
 //MQTT GameStatus更新
 void GameData::updateGameStatus(const robomaster::GameStatus &data){
-    const GameStage previousStage = m_gameState.gameProgress;
-    const int previousGameTime = m_gameState.gameTime;
     applyOfficialGameStateSnapshot(
         static_cast<GameStage>(data.current_stage()),
         static_cast<quint16>(data.stage_countdown_sec()),
@@ -3052,7 +2883,6 @@ void GameData::updateGameStatus(const robomaster::GameStatus &data){
         static_cast<quint16>(data.blue_score()),
         static_cast<quint8>(data.current_round()),
         data.is_paused());
-    notifyPeriodicRewards(previousStage, previousGameTime);
 }
 
 void GameData::updateGlobalLogisticsStatus(
@@ -3134,14 +2964,11 @@ void GameData::updateGlobalSpecialMechanism(
 
 void GameData::updateGameStateFromS1(int stage, int remainingTime, int redScore, int blueScore, int round, bool isPaused)
 {
-  const GameStage previousStage = m_gameState.gameProgress;
-  const int previousGameTime = m_gameState.gameTime;
   applyOfficialGameStateSnapshot(static_cast<GameStage>(stage),
                                  static_cast<quint16>(remainingTime),
                                  static_cast<quint16>(redScore),
                                  static_cast<quint16>(blueScore),
                                  static_cast<quint8>(round), isPaused);
-  notifyPeriodicRewards(previousStage, previousGameTime);
 }
 
 void GameData::updateAirSupportStatusSync(
@@ -3651,6 +3478,9 @@ void GameData::processProtocolData(
     break;
   case robomaster::RoboMasterMessage::kEvent: {
     const auto &evt = message.event();
+    m_lastEventObservation = {{QStringLiteral("eventId"), evt.event_id()},
+                              {QStringLiteral("param"), QString::fromStdString(evt.param())}};
+    emit lastEventObservationChanged();
     const int eventId = evt.event_id();
     const QString param = QString::fromStdString(evt.param()).trimmed();
 
@@ -3780,16 +3610,6 @@ void GameData::processProtocolData(
         emit blueRuneStatusUpdated();
       }
       emit runeActived(m_runeData.type, m_runeData.status);
-    } else if (eventId == 5) {
-      addSystemMessage(QStringLiteral("己方英雄累计造成狙击伤害 %1").arg(param),
-                       QStringLiteral("#60D8B7"));
-    } else if (eventId == 6) {
-      addSystemMessage(QStringLiteral("对方英雄累计造成狙击伤害 %1").arg(param),
-                       QStringLiteral("#d52424"));
-    } else if (eventId == 7) {
-      eventInfo(evt);
-    } else if (eventId == 8) {
-      eventInfo(evt);
     } else if (eventId == 9) {
       eventInfo(evt);
     } else if (eventId == 10) {
@@ -3799,10 +3619,6 @@ void GameData::processProtocolData(
     } else if (eventId == 12) {
       eventInfo(evt);
     } else if (eventId == 13) {
-      eventInfo(evt);
-    } else if (eventId == 14 || eventId == 15) {
-      // V1.3.0: 14=飞镖命中，15=双方飞镖闸门开启。
-      // 两者均不是工程装配结果，不得修改 TechCore 状态。
       eventInfo(evt);
     } else if (eventId == 16) {
       m_event16LastReceivedAt = QDateTime::currentDateTime();

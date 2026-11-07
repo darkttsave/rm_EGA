@@ -701,6 +701,7 @@ Q_PROPERTY(QVariantMap robotRespawnStatus READ robotRespawnStatus NOTIFY robotRe
   Q_PROPERTY(QVariantMap robotDynamicStatus READ robotDynamicStatus NOTIFY robotDynamicStatusChanged)
 
   // Observation of Event 16 only; this is not the current installation state.
+  Q_PROPERTY(QVariantMap lastEventObservation READ lastEventObservation NOTIFY lastEventObservationChanged)
   Q_PROPERTY(bool event16Received READ event16Received NOTIFY event16ReceivedChanged)
   Q_PROPERTY(QDateTime event16LastReceivedAt READ event16LastReceivedAt NOTIFY event16ReceivedChanged)
 
@@ -721,6 +722,7 @@ public:
   QVariantMap robotModuleStatus() const;
   QVariantMap robotDynamicStatus() const;
   void clearRobotDynamicStatus();
+  QVariantMap lastEventObservation() const { return m_lastEventObservation; }
   bool event16Received() const { return m_event16LastReceivedAt.isValid(); }
   QDateTime event16LastReceivedAt() const { return m_event16LastReceivedAt; }
 
@@ -1386,6 +1388,7 @@ signals:
   void airSupportStatusUpdated();
   void siloStatusChanged();
   void techCoreMotionStateSyncUpdated();
+  void lastEventObservationChanged();
   void event16ReceivedChanged();
   void robotDynamicStatusChanged();
   void baseHealthUpdatedProxy(); // 用于 QML 的无参数信号
@@ -1496,6 +1499,7 @@ private:
 
   // 0x0101 场地事件数据缓存
   quint32 m_eventData = 0;
+  QVariantMap m_lastEventObservation; // Latest raw parsed event, without business interpretation.
   QDateTime m_event16LastReceivedAt; // Local receipt time, not installation state.
   RuneData m_runeData;
   RM::RuneVoicePromptTracker m_runeVoicePromptTracker;
@@ -1508,8 +1512,6 @@ private:
   int m_airSupportCostCoins = 0;
   int m_airSupportIsBeingTargeted = 0;
   int m_airSupportShooterStatus = 0;
-  int m_lastPeriodicRewardNotifyTime = -1;
-  int m_lastPeriodicAirSupportNotifyTime = -1;
   int m_siloTargetId = 1;
   int m_siloGateState = 0;
   qint64 m_lastSiloUpdateMs = 0; // 最近一次收到 DartSelectTargetStatusSync 的时间戳（ms）
@@ -1573,7 +1575,6 @@ private:
                                  quint16 redScore, quint16 blueScore,
                                  quint8 currentRound);
   int roundScoreDelta(bool redSide) const;
-  void notifyPeriodicRewards(GameStage previousStage, int previousGameTime);//空中支援时间/金币定时增加
   void trackAllyBaseHealthDropAlert(TeamColor team, quint16 hp, qint64 nowMs);
   void trackAllyOutpostHealthDropAlert(TeamColor team, quint16 hp, qint64 nowMs);
   int currentRuneType() const;
