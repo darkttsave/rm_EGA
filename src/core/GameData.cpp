@@ -553,6 +553,8 @@ void GameData::setCurrentRobotId(qint64 robotId) {
   m_currentRobotId = next;
   ++m_mqttIdentityEpoch;
   emit globalHealthObservationChanged();
+  emit penaltyObservationChanged();
+  emit injuryObservationChanged();
   emit currentRobotIdentityChanged();
   emit mqttReceptionMetadataChanged();
   clearRobotDynamicStatus();
@@ -1959,6 +1961,16 @@ void GameData::updateRobotStaticStatus(const robomaster::RobotStaticStatus &data
 }
 }
 
+QVariantMap GameData::penaltyObservation() const {
+  QVariantMap result = m_penaltyObservation;
+  result["identityMatches"] = result.value("identity").toInt() == m_currentRobotId && result.value("identityEpoch").toULongLong() == m_mqttIdentityEpoch;
+  return result;
+}
+QVariantMap GameData::injuryObservation() const {
+  QVariantMap result = m_injuryObservation;
+  result["identityMatches"] = result.value("identity").toInt() == m_currentRobotId && result.value("identityEpoch").toULongLong() == m_mqttIdentityEpoch;
+  return result;
+}
 QVariantMap GameData::globalHealthObservation() const {
   return {{"received", m_globalHealthReceived}, {"receiverId", m_globalHealthReceiver},
           {"identityMatches", m_globalHealthIdentityEpoch == m_mqttIdentityEpoch && m_globalHealthReceiver == m_currentRobotId},
@@ -2004,10 +2016,10 @@ QVariantMap GameData::mqttReceptionMetadata() const {
     return record;
   };
   QVariantMap topics;
-  for (const char *name : {"GameStatus", "RobotDynamicStatus", "RobotModuleStatus", "GlobalUnitStatus", "Event16"}) {
+  for (const char *name : {"GameStatus", "RobotDynamicStatus", "RobotModuleStatus", "GlobalUnitStatus", "PenaltyInfo", "RobotInjuryStat", "Event16"}) {
     const QString key = QString::fromLatin1(name);
     topics[key] = annotate(m_mqttTopicMetadata.value(key).toMap(),
-        key == QLatin1String("RobotDynamicStatus") || key == QLatin1String("RobotModuleStatus") || key == QLatin1String("GlobalUnitStatus"));
+        key == QLatin1String("RobotDynamicStatus") || key == QLatin1String("RobotModuleStatus") || key == QLatin1String("GlobalUnitStatus") || key == QLatin1String("PenaltyInfo") || key == QLatin1String("RobotInjuryStat"));
   }
   QVariantMap staticRobots;
   for (auto it = m_mqttStaticMetadata.cbegin(); it != m_mqttStaticMetadata.cend(); ++it)
@@ -2020,7 +2032,7 @@ QVariantMap GameData::mqttReceptionMetadata() const {
 void GameData::recordMqttObservation(const QString &topic, int identity, qint64 receivedMs, qint64 monotonicMs) {
   if (!m_mqttSessionConnected || receivedMs <= 0) return;
   const bool isStatic = topic == QLatin1String("RobotStaticStatus");
-  const bool isIdentityScoped = topic == QLatin1String("RobotDynamicStatus") || topic == QLatin1String("RobotModuleStatus") || topic == QLatin1String("GlobalUnitStatus");
+  const bool isIdentityScoped = topic == QLatin1String("RobotDynamicStatus") || topic == QLatin1String("RobotModuleStatus") || topic == QLatin1String("GlobalUnitStatus") || topic == QLatin1String("PenaltyInfo") || topic == QLatin1String("RobotInjuryStat");
   if (isIdentityScoped) {
     const auto resolved = RM::resolveRobotIdentity(identity);
     if (resolved.kind != RM::IdentityKind::Robot || !resolved.team) return;
@@ -2052,8 +2064,12 @@ void GameData::recordMqttObservation(const QString &topic, int identity, qint64 
         m_globalHealthAcceptedSource[it.key()] = QStringLiteral("official_mqtt");
     emit globalHealthObservationChanged();
   }
+  if (topic == QLatin1String("PenaltyInfo")) { m_penaltyObservation["source"] = QStringLiteral("official_mqtt"); emit penaltyObservationChanged(); }
+  if (topic == QLatin1String("RobotInjuryStat")) { m_injuryObservation["source"] = QStringLiteral("official_mqtt"); emit injuryObservationChanged(); }
   QVariantMap fields;
-  if (topic == QLatin1String("GlobalUnitStatus")) fields = m_globalHealthFields;
+  if (topic == QLatin1String("PenaltyInfo")) fields = m_penaltyObservation.value("fields").toMap();
+  else if (topic == QLatin1String("RobotInjuryStat")) fields = m_injuryObservation.value("fields").toMap();
+  else if (topic == QLatin1String("GlobalUnitStatus")) fields = m_globalHealthFields;
   else if (topic == QLatin1String("GameStatus")) fields = m_gameStatusFields;
   else if (topic == QLatin1String("RobotDynamicStatus")) fields = m_dynamicObservation;
   else if (isStatic) {
@@ -3968,6 +3984,23 @@ void GameData::updateRadarInfo(const robomaster::RadarInfoToClient &data) {
 
 // === 机器人伤害更新 ===
 void GameData::updateRobotInjury(const robomaster::RobotInjuryStat &data) {
+  const auto receiver = RM::resolveRobotIdentity(m_currentRobotId);
+  if (receiver.kind != RM::IdentityKind::Robot || !receiver.team) return;
+  QVariantMap fields;
+#define OBSERVE_INJURY(field) fields[QStringLiteral(#field)] = data.has_##field() ? QVariantMap{{"state", "valid"}, {"value", QVariant::fromValue(data.field())}} : QVariantMap{{"state", "unreported"}}
+  OBSERVE_INJURY(total_damage); OBSERVE_INJURY(collision_damage); OBSERVE_INJURY(small_projectile_damage);
+  OBSERVE_INJURY(large_projectile_damage); OBSERVE_INJURY(dart_splash_damage); OBSERVE_INJURY(module_offline_damage);
+  OBSERVE_INJURY(offline_damage); OBSERVE_INJURY(penalty_damage); OBSERVE_INJURY(server_kill_damage); OBSERVE_INJURY(killer_id);
+#undef OBSERVE_INJURY
+  if (data.has_killer_id()) {
+    const auto killer = RM::resolveRobotIdentity(data.killer_id());
+    auto field = fields.value("killer_id").toMap();
+    field["identityKind"] = killer.kind == RM::IdentityKind::Robot ? "robot" : killer.kind == RM::IdentityKind::FieldObject ? "field_object" : killer.kind == RM::IdentityKind::Reserved ? "reserved" : "unknown";
+    field["identityName"] = killer.displayName;
+    fields["killer_id"] = field;
+  }
+  m_injuryObservation = {{"received", true}, {"identity", m_currentRobotId}, {"identityEpoch", QVariant::fromValue(m_mqttIdentityEpoch)}, {"source", "protocol_unverified"}, {"fields", fields}};
+  emit injuryObservationChanged();
   // 将 RobotInjuryStat 映射到 ~ 面板的五类统计
   m_injuryTotal = data.total_damage();
   m_injuryCollision = data.collision_damage();
@@ -4111,6 +4144,17 @@ void GameData::recordKill(quint8 killerId, quint8 victimId) {
 
 // MQTT PenaltyInfo 默认为当前机器人判罚信息。
 void GameData::updatePenalty(const robomaster::PenaltyInfo &data) {
+  const auto receiver = RM::resolveRobotIdentity(m_currentRobotId);
+  if (receiver.kind != RM::IdentityKind::Robot || !receiver.team) return;
+  QVariantMap fields;
+#define OBSERVE_PENALTY(field) fields[QStringLiteral(#field)] = data.has_##field() ? QVariantMap{{"state", "valid"}, {"value", QVariant::fromValue(data.field())}} : QVariantMap{{"state", "unreported"}}
+  OBSERVE_PENALTY(penalty_type); OBSERVE_PENALTY(penalty_effect_sec); OBSERVE_PENALTY(total_penalty_num);
+#undef OBSERVE_PENALTY
+  if (data.has_penalty_type() && (data.penalty_type() < 1 || data.penalty_type() > 6)) {
+    auto type = fields.value("penalty_type").toMap(); type["state"] = "unknown"; fields["penalty_type"] = type;
+  }
+  m_penaltyObservation = {{"received", true}, {"identity", m_currentRobotId}, {"identityEpoch", QVariant::fromValue(m_mqttIdentityEpoch)}, {"source", "protocol_unverified"}, {"fields", fields}};
+  emit penaltyObservationChanged();
   //超功率
   if (data.penalty_type() == 4) {
     if (RobotData *robot = findRobotById(m_currentRobotId)) {

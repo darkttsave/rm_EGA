@@ -368,9 +368,9 @@ message RoboMasterMessage {
 // ============================================================================
 
 message PenaltyInfo {
-  uint32 penalty_type = 1;
-  uint32 penalty_effect_sec = 2;
-  uint32 total_penalty_num = 3;
+  optional uint32 penalty_type = 1;
+  optional uint32 penalty_effect_sec = 2;
+  optional uint32 total_penalty_num = 3;
 }
 
 message Event {
@@ -491,16 +491,16 @@ message RobotModuleStatus {
 }
 
 message RobotInjuryStat {
-  uint32 total_damage = 1;
-  uint32 collision_damage = 2;
-  uint32 small_projectile_damage = 3;
-  uint32 large_projectile_damage = 4;
-  uint32 dart_splash_damage = 5;
-  uint32 module_offline_damage = 6;
-  uint32 offline_damage = 7;
-  uint32 penalty_damage = 8;
-  uint32 server_kill_damage = 9;
-  uint32 killer_id = 10;
+  optional uint32 total_damage = 1;
+  optional uint32 collision_damage = 2;
+  optional uint32 small_projectile_damage = 3;
+  optional uint32 large_projectile_damage = 4;
+  optional uint32 dart_splash_damage = 5;
+  optional uint32 module_offline_damage = 6;
+  optional uint32 offline_damage = 7;
+  optional uint32 penalty_damage = 8;
+  optional uint32 server_kill_damage = 9;
+  optional uint32 killer_id = 10;
 }
 
 message RobotPathPlanInfo {

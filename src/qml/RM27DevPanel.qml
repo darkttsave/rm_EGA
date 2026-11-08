@@ -48,7 +48,7 @@ Rectangle {
             y: row.sideBySide ? 0 : primaryText.height + 2
             width: row.sideBySide ? row.width * 0.5 : row.width
             visible: row.detail.length > 0
-            text: row.detail; color: "#a8c4d8"; font.pixelSize: 16; wrapMode: Text.Wrap
+            text: row.detail; color: row.detail.indexOf("valid") === 0 ? "#60D8B7" : "#a8c4d8"; font.pixelSize: 16; wrapMode: Text.Wrap
         }
     }
 
@@ -80,7 +80,7 @@ Rectangle {
                       "\n时间为本机接收时间；当前会话不代表实时有效。"
             }
             Repeater {
-                model: ["GameStatus", "GlobalUnitStatus", "RobotDynamicStatus", "RobotStaticStatus", "RobotModuleStatus", "Event16"]
+                model: ["GameStatus", "GlobalUnitStatus", "RobotDynamicStatus", "RobotStaticStatus", "RobotModuleStatus", "PenaltyInfo", "RobotInjuryStat", "Event16"]
                 delegate: Text {
                     required property string modelData
                     property var meta: { root.revision; return root.dataSource ? root.dataSource.mqttReceptionMetadata : ({}) }
@@ -197,6 +197,59 @@ Rectangle {
                     SourceRow { id: countdownProjection; primary: "剩余 " + gameProjection.old.stage_countdown_sec + "（" + gameProjection.diff("stage_countdown_sec") + "）" }
                     SourceRow { primary: "旧兼容比分 " + gameProjection.old.red_score + ":" + gameProjection.old.blue_score + "（红 " + gameProjection.diff("red_score") + " / 蓝 " + gameProjection.diff("blue_score") + "）" }
                     SourceRow { primary: "暂停 " + gameProjection.old.is_paused + "（" + gameProjection.diff("is_paused") + "）"; detail: "差异只表示数值对照，不代表实时性或来源权威。" }
+                }
+            }
+            SourceCard {
+                title: "判罚信息 · 终端关联身份（非消息自带身份）"
+                Column {
+                    width: parent.width; spacing: 6
+                    property var snapshot: root.dataSource ? root.dataSource.penaltyObservation : ({})
+                    property var receipt: root.dataSource ? ((root.dataSource.mqttReceptionMetadata.topics || ({})).PenaltyInfo || ({})) : ({})
+                    SourceRow {
+                        objectName: "rm27PenaltySession"
+                        primary: "观测身份: " + (parent.snapshot.received ? parent.snapshot.identity : "未收到") + (parent.snapshot.received && !parent.snapshot.identityMatches ? "（旧身份）" : "")
+                        detail: parent.snapshot.source === "official_mqtt" ? "会话: " + (parent.receipt.sessionState || "never") + (parent.receipt.receivedAt ? " · 本机接收 " + Qt.formatDateTime(parent.receipt.receivedAt, "HH:mm:ss.zzz") : "") : "来源未确认"
+                    }
+                    Repeater {
+                        model: [{key:"penalty_type", name:"判罚类型"}, {key:"penalty_effect_sec", name:"效果时长（秒）"}, {key:"total_penalty_num", name:"累计判罚数量"}]
+                        delegate: SourceRow {
+                            required property var modelData
+                            property var item: (parent.snapshot.fields || ({}))[modelData.key]
+                            property var names: ["", "黄牌", "双方黄牌", "红牌", "超功率", "超热量", "超射速"]
+                            objectName: "rm27Penalty_" + modelData.key
+                            primary: modelData.name + ": " + (!item || item.state === "unreported" ? "未上报" : String(item.value) + (modelData.key === "penalty_type" ? "（" + (item.value >= 1 && item.value <= 6 ? names[item.value] : "未知类型") + "）" : ""))
+                            detail: !item || item.state === "unreported" ? "未上报" : item.state === "unknown" ? "未知枚举" : "valid"
+                        }
+                    }
+                }
+            }
+            SourceCard {
+                title: "受伤统计 · 一次存活期间累计（终端关联身份）"
+                Column {
+                    width: parent.width; spacing: 6
+                    property var snapshot: root.dataSource ? root.dataSource.injuryObservation : ({})
+                    property var receipt: root.dataSource ? ((root.dataSource.mqttReceptionMetadata.topics || ({})).RobotInjuryStat || ({})) : ({})
+                    SourceRow {
+                        objectName: "rm27InjurySession"
+                        primary: "观测身份: " + (parent.snapshot.received ? parent.snapshot.identity : "未收到") + (parent.snapshot.received && !parent.snapshot.identityMatches ? "（旧身份）" : "")
+                        detail: parent.snapshot.source === "official_mqtt" ? "会话: " + (parent.receipt.sessionState || "never") + (parent.receipt.receivedAt ? " · 本机接收 " + Qt.formatDateTime(parent.receipt.receivedAt, "HH:mm:ss.zzz") : "") : "来源未确认"
+                    }
+                    Repeater {
+                        model: [
+                            {key:"total_damage", name:"累计受伤总计"}, {key:"collision_damage", name:"撞击伤害"},
+                            {key:"small_projectile_damage", name:"17mm 弹丸伤害"}, {key:"large_projectile_damage", name:"42mm 弹丸伤害"},
+                            {key:"dart_splash_damage", name:"飞镖溅射伤害"}, {key:"module_offline_damage", name:"模块离线扣血"},
+                            {key:"offline_damage", name:"异常离线扣血"}, {key:"penalty_damage", name:"判罚扣血"},
+                            {key:"server_kill_damage", name:"服务器强制战亡扣血"}, {key:"killer_id", name:"击杀者 ID"}
+                        ]
+                        delegate: SourceRow {
+                            required property var modelData
+                            property var item: (parent.snapshot.fields || ({}))[modelData.key]
+                            objectName: "rm27Injury_" + modelData.key
+                            primary: modelData.name + ": " + (!item || item.state === "unreported" ? "未上报" : String(item.value))
+                            detail: !item || item.state === "unreported" ? "未上报" : modelData.key === "killer_id" ? "valid · " + (item.identityKind === "unknown" ? "未知身份" : item.identityName) : "valid"
+                        }
+                    }
                 }
             }
             Text { text: "全局比赛状态（官方 GameStatus 观测）"; color: "#8de0ff"; font.pixelSize: 21 }

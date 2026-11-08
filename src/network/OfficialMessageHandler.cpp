@@ -18,6 +18,27 @@ QJsonArray repeatedFieldToJsonArray(const RepeatedFieldT &field) {
 OfficialMessageHandler::Result OfficialMessageHandler::handle(
     const QString &topic, const QByteArray &payload, GameData &gameData,
     const ParsedLogger &logger, const GameStatusCacheUpdater &cacheUpdater) {
+  if (topic == QLatin1String("PenaltyInfo")) {
+    robomaster::PenaltyInfo msg;
+    if (!msg.ParseFromArray(payload.data(), payload.size())) return Result::ParseFailed;
+    if (logger) logger(QStringLiteral("PenaltyInfo type=%1 effect_sec=%2 total=%3")
+        .arg(msg.penalty_type()).arg(msg.penalty_effect_sec()).arg(msg.total_penalty_num()),
+        {{QStringLiteral("penalty_type"), static_cast<qint64>(msg.penalty_type())},
+         {QStringLiteral("penalty_effect_sec"), static_cast<qint64>(msg.penalty_effect_sec())},
+         {QStringLiteral("total_penalty_num"), static_cast<qint64>(msg.total_penalty_num())}});
+    gameData.updatePenalty(msg);
+    return Result::Parsed;
+  }
+  if (topic == QLatin1String("RobotInjuryStat")) {
+    robomaster::RobotInjuryStat msg;
+    if (!msg.ParseFromArray(payload.data(), payload.size())) return Result::ParseFailed;
+    if (logger) logger(QStringLiteral("RobotInjuryStat total=%1 killer_id=%2")
+        .arg(msg.total_damage()).arg(msg.killer_id()),
+        {{QStringLiteral("total_damage"), static_cast<qint64>(msg.total_damage())},
+         {QStringLiteral("killer_id"), static_cast<qint64>(msg.killer_id())}});
+    gameData.updateRobotInjury(msg);
+    return Result::Parsed;
+  }
   if (topic == QLatin1String("GameStatus")) {
     robomaster::GameStatus msg;
     if (!msg.ParseFromArray(payload.data(), payload.size()))

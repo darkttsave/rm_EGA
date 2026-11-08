@@ -701,6 +701,8 @@ Q_PROPERTY(QVariantMap robotRespawnStatus READ robotRespawnStatus NOTIFY robotRe
   Q_PROPERTY(QVariantMap robotDynamicStatus READ robotDynamicStatus NOTIFY robotDynamicStatusChanged)
   Q_PROPERTY(QVariantMap gameStatusObservation READ gameStatusObservation NOTIFY gameStatusObservationChanged)
   Q_PROPERTY(QVariantMap mqttReceptionMetadata READ mqttReceptionMetadata NOTIFY mqttReceptionMetadataChanged)
+  Q_PROPERTY(QVariantMap penaltyObservation READ penaltyObservation NOTIFY penaltyObservationChanged)
+  Q_PROPERTY(QVariantMap injuryObservation READ injuryObservation NOTIFY injuryObservationChanged)
   Q_PROPERTY(QVariantMap globalHealthObservation READ globalHealthObservation NOTIFY globalHealthObservationChanged)
   Q_PROPERTY(QVariantMap localHeatObservation READ localHeatObservation NOTIFY localHeatObservationChanged)
   Q_PROPERTY(int videoReceptionState READ videoReceptionState NOTIFY videoReceptionStateChanged)
@@ -726,6 +728,8 @@ public:
 
   QVariantMap mqttReceptionMetadata() const;
   QVariantMap globalHealthObservation() const;
+  QVariantMap penaltyObservation() const;
+  QVariantMap injuryObservation() const;
   QVariantMap localHeatObservation() const { return m_localHeatObservation; }
   int videoReceptionState() const { return m_videoReceptionState; }
   void setVideoReceptionState(int state);
@@ -1407,6 +1411,8 @@ signals:
   void currentRobotIdentityChanged();
   void mqttReceptionMetadataChanged();
   void globalHealthObservationChanged();
+  void penaltyObservationChanged();
+  void injuryObservationChanged();
   void localHeatObservationChanged();
   void videoReceptionStateChanged();
   void gameStatusObservationChanged();
@@ -1521,6 +1527,8 @@ private:
 
   // 0x0101 场地事件数据缓存
   quint32 m_eventData = 0;
+  QVariantMap m_penaltyObservation;
+  QVariantMap m_injuryObservation;
   bool m_globalHealthReceived = false;
   bool m_globalHealthMqttVerified = false;
   int m_globalHealthReceiver = 0;

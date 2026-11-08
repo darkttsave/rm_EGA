@@ -29,6 +29,8 @@ void captureDynamicCallback(QtMsgType, const QMessageLogContext &, const QString
   if (message.contains("RM26_MQTT_RX_TIMING direction=rx topic=Event")) observedQueuedTopics.fetch_or(8);
   if (message.contains("RM26_MQTT_RX_TIMING direction=rx topic=RobotModuleStatus")) observedQueuedTopics.fetch_or(16);
   if (message.contains("RM26_MQTT_RX_TIMING direction=rx topic=GlobalUnitStatus")) observedQueuedTopics.fetch_or(32);
+  if (message.contains("RM26_MQTT_RX_TIMING direction=rx topic=PenaltyInfo")) observedQueuedTopics.fetch_or(64);
+  if (message.contains("RM26_MQTT_RX_TIMING direction=rx topic=RobotInjuryStat")) observedQueuedTopics.fetch_or(128);
 }
 QStringList detailedLogs;
 void captureDetails(QtMsgType type, const QMessageLogContext &, const QString &message) {
@@ -290,6 +292,13 @@ private slots:
     QTRY_COMPARE_WITH_TIMEOUT(topicMeta("Event16").value("sessionState").toString(), QString("current"), 5000);
     QCOMPARE(topicMeta("Event16").value("identity").toInt(), 0);
     const auto eventTime = data.event16LastReceivedAt();
+    robomaster::PenaltyInfo penalty; penalty.set_penalty_type(1); penalty.set_total_penalty_num(2);
+    robomaster::RobotInjuryStat injury; injury.set_total_damage(10); injury.set_killer_id(101);
+    QVERIFY(publisher.publish("PenaltyInfo", bytes(penalty), 1));
+    QVERIFY(publisher.publish("RobotInjuryStat", bytes(injury), 1));
+    QTRY_COMPARE_WITH_TIMEOUT(topicMeta("PenaltyInfo").value("sessionState").toString(), QString("current"), 5000);
+    QTRY_COMPARE_WITH_TIMEOUT(topicMeta("RobotInjuryStat").value("sessionState").toString(), QString("current"), 5000);
+    QCOMPARE(data.injuryObservation().value("identity").toInt(), 1);
     data.setCurrentRobotId(101);
     QCOMPARE(topicMeta("RobotDynamicStatus").value("sessionState").toString(), QString("identity_changed"));
     QVERIFY(publisher.publish(QStringLiteral("RobotDynamicStatus"), bytes(msg), 1));
@@ -302,14 +311,19 @@ private slots:
     msg.set_current_heat(55.5f);
     const bool identitySent = publisher.publish("RobotDynamicStatus", bytes(msg), 1);
     global.Clear(); global.add_robot_health(999); publisher.publish("GlobalUnitStatus", bytes(global), 1);
-    for (int i = 0; i < 100 && (observedQueuedTopics.load() & 33) != 33; ++i) QThread::msleep(10);
-    const bool identitySeen = (observedQueuedTopics.load() & 33) == 33;
+    penalty.set_penalty_type(3); injury.set_total_damage(999);
+    publisher.publish("PenaltyInfo", bytes(penalty), 1); publisher.publish("RobotInjuryStat", bytes(injury), 1);
+    for (int i = 0; i < 100 && (observedQueuedTopics.load() & 225) != 225; ++i) QThread::msleep(10);
+    const bool identitySeen = (observedQueuedTopics.load() & 225) == 225;
     data.setCurrentRobotId(101); data.setCurrentRobotId(1);
     QCoreApplication::processEvents();
     qInstallMessageHandler(identityHandler);
     QVERIFY(identitySent); QVERIFY(identitySeen);
     QVERIFY(!data.robotDynamicStatus().value("received").toBool());
     QCOMPARE(data.globalHealthObservation().value("accepted").toMap().value("1").toUInt(), 111u);
+    QCOMPARE(data.injuryObservation().value("fields").toMap().value("total_damage").toMap().value("value").toUInt(), 10u);
+    QCOMPARE(data.penaltyObservation().value("fields").toMap().value("penalty_type").toMap().value("value").toUInt(), 1u);
+    QCOMPARE(topicMeta("PenaltyInfo").value("sessionState").toString(), QString("identity_changed"));
     QCOMPARE(topicMeta("GlobalUnitStatus").value("sessionState").toString(), QString("identity_changed"));
     QCOMPARE(topicMeta("RobotDynamicStatus").value("sessionState").toString(), QString("identity_changed"));
     // Ensure a callback has queued the old message while the Qt thread remains blocked.
@@ -323,8 +337,9 @@ private slots:
     robomaster::RobotModuleStatus queuedModule; queuedModule.set_modular_42mm(1);
     publisher.publish("RobotModuleStatus", bytes(queuedModule), 1);
     publisher.publish("GlobalUnitStatus", bytes(global), 1);
-    for (int i = 0; i < 200 && observedQueuedTopics.load() != 63; ++i) QThread::msleep(10);
-    const bool callbackSeen = dynamicCallbackObserved.load() && observedQueuedTopics.load() == 63;
+    publisher.publish("PenaltyInfo", bytes(penalty), 1); publisher.publish("RobotInjuryStat", bytes(injury), 1);
+    for (int i = 0; i < 200 && observedQueuedTopics.load() != 255; ++i) QThread::msleep(10);
+    const bool callbackSeen = dynamicCallbackObserved.load() && observedQueuedTopics.load() == 255;
     network.stopMqtt();
     data.setCurrentRobotId(101);
     QCoreApplication::processEvents();
@@ -340,6 +355,12 @@ private slots:
     QVERIFY(metadata().value("session").toULongLong() > session1);
     QCOMPARE(topicMeta("GameStatus").value("sessionState").toString(), QString("historical"));
     QCOMPARE(topicMeta("GlobalUnitStatus").value("sessionState").toString(), QString("historical"));
+    QCOMPARE(topicMeta("PenaltyInfo").value("sessionState").toString(), QString("historical"));
+    QCOMPARE(topicMeta("RobotInjuryStat").value("sessionState").toString(), QString("historical"));
+    QVERIFY(publisher.publish("PenaltyInfo", bytes(penalty), 1)); QVERIFY(publisher.publish("RobotInjuryStat", bytes(injury), 1));
+    QTRY_COMPARE_WITH_TIMEOUT(topicMeta("PenaltyInfo").value("sessionState").toString(), QString("current"), 5000);
+    QTRY_COMPARE_WITH_TIMEOUT(topicMeta("RobotInjuryStat").value("sessionState").toString(), QString("current"), 5000);
+    QCOMPARE(data.injuryObservation().value("identity").toInt(), 101);
     global.Clear(); global.add_robot_health(212);
     QVERIFY(publisher.publish("GlobalUnitStatus", bytes(global), 1));
     QTRY_COMPARE_WITH_TIMEOUT(data.globalHealthObservation().value("receiverId").toInt(), 101, 5000);
@@ -375,6 +396,62 @@ private slots:
     network.stopMqtt(); publisher.disconnect();
   }
 #endif
+  void penaltyAndInjuryObservations() {
+    Q_INIT_RESOURCE(qml);
+    GameData data; data.setCurrentRobotId(1);
+    QQuickWidget panel; panel.rootContext()->setContextProperty("gameData", &data);
+    panel.setSource(QUrl(QStringLiteral("qrc:/qml/RM27DevPanel.qml")));
+    QCOMPARE(panel.status(), QQuickWidget::Ready);
+    std::function<QQuickItem *(QQuickItem *, const QString &)> findVisual =
+      [&](QQuickItem *item, const QString &name) -> QQuickItem * {
+        if (item->objectName() == name) return item;
+        for (auto *child : item->childItems()) if (auto *found = findVisual(child, name)) return found;
+        return nullptr;
+      };
+    auto *typeRow = findVisual(panel.rootObject(), "rm27Penalty_penalty_type");
+    auto *totalRow = findVisual(panel.rootObject(), "rm27Injury_total_damage");
+    auto *killerRow = findVisual(panel.rootObject(), "rm27Injury_killer_id");
+    QVERIFY(typeRow); QVERIFY(totalRow); QVERIFY(killerRow);
+    robomaster::PenaltyInfo penalty;
+    QCOMPARE(OfficialMessageHandler::handle("PenaltyInfo", bytes(penalty), data), OfficialMessageHandler::Result::Parsed);
+    auto penaltyField = [&data](const char *name) { return data.penaltyObservation().value("fields").toMap().value(QLatin1String(name)).toMap(); };
+    QCOMPARE(penaltyField("penalty_type").value("state").toString(), QString("unreported"));
+    for (uint32_t v = 1; v <= 6; ++v) {
+      penalty.set_penalty_type(v); penalty.set_penalty_effect_sec(0); penalty.set_total_penalty_num(4294967295u);
+      QCOMPARE(OfficialMessageHandler::handle("PenaltyInfo", bytes(penalty), data), OfficialMessageHandler::Result::Parsed);
+      QCOMPARE(penaltyField("penalty_type").value("state").toString(), QString("valid"));
+      QCOMPARE(penaltyField("penalty_type").value("value").toUInt(), v);
+    }
+    QCOMPARE(penaltyField("penalty_effect_sec").value("value").toUInt(), 0u);
+    QCOMPARE(penaltyField("total_penalty_num").value("value").toUInt(), 4294967295u);
+    penalty.set_penalty_type(0); data.updatePenalty(penalty);
+    QCOMPARE(penaltyField("penalty_type").value("state").toString(), QString("unknown"));
+    QTRY_VERIFY(typeRow->property("primary").toString().contains(QStringLiteral("0（未知类型）")));
+    penalty.set_penalty_type(99); penalty.set_penalty_effect_sec(65536); data.updatePenalty(penalty);
+    QCOMPARE(penaltyField("penalty_type").value("value").toUInt(), 99u);
+    QCOMPARE(penaltyField("penalty_effect_sec").value("value").toUInt(), 65536u);
+    robomaster::RobotInjuryStat injury;
+    injury.set_total_damage(0); injury.set_collision_damage(1); injury.set_small_projectile_damage(2);
+    injury.set_large_projectile_damage(3); injury.set_dart_splash_damage(4); injury.set_module_offline_damage(5);
+    injury.set_offline_damage(6); injury.set_penalty_damage(7); injury.set_server_kill_damage(4294967295u); injury.set_killer_id(101);
+    QCOMPARE(OfficialMessageHandler::handle("RobotInjuryStat", bytes(injury), data), OfficialMessageHandler::Result::Parsed);
+    auto injuryFields = data.injuryObservation().value("fields").toMap();
+    const char *keys[] = {"total_damage", "collision_damage", "small_projectile_damage", "large_projectile_damage", "dart_splash_damage", "module_offline_damage", "offline_damage", "penalty_damage", "server_kill_damage", "killer_id"};
+    const uint32_t values[] = {0,1,2,3,4,5,6,7,4294967295u,101};
+    for (int i=0; i<10; ++i) { auto field = injuryFields.value(QLatin1String(keys[i])).toMap(); QCOMPARE(field.value("state").toString(), QString("valid")); QCOMPARE(field.value("value").toUInt(), values[i]); }
+    QCOMPARE(injuryFields.value("killer_id").toMap().value("identityKind").toString(), QString("robot"));
+    QTRY_VERIFY(totalRow->property("primary").toString().contains(QStringLiteral("总计: 0")));
+    QTRY_VERIFY(killerRow->property("primary").toString().contains(QStringLiteral("101")));
+    injury.Clear(); injury.set_killer_id(4294967295u); injury.set_collision_damage(25); data.updateRobotInjury(injury);
+    injuryFields = data.injuryObservation().value("fields").toMap();
+    QCOMPARE(injuryFields.value("total_damage").toMap().value("state").toString(), QString("unreported"));
+    QCOMPARE(injuryFields.value("killer_id").toMap().value("identityKind").toString(), QString("unknown"));
+    QVERIFY(data.injuryObservation().value("identityMatches").toBool());
+    data.setCurrentRobotId(101);
+    QVERIFY(!data.injuryObservation().value("identityMatches").toBool());
+    QVERIFY(!data.penaltyObservation().value("identityMatches").toBool());
+    QCOMPARE(OfficialMessageHandler::handle("RobotInjuryStat", QByteArray::fromHex("0880"), data), OfficialMessageHandler::Result::ParseFailed);
+  }
   void staticPerformanceAndDeveloperPanel() {
     Q_INIT_RESOURCE(qml);
     GameData data; data.setCurrentRobotId(1);

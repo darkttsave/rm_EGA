@@ -1241,7 +1241,7 @@ void NetworkManager::processMqttMessage(const QString &topic,
   }
   dumpMqttEvent(QStringLiteral("received"), topic, payload, m_gameData);
 
-  if ((topic == QLatin1String("RobotModuleStatus") || topic == QLatin1String("RobotDynamicStatus") || topic == QLatin1String("GlobalUnitStatus")) && m_mqttManager &&
+  if ((topic == QLatin1String("RobotModuleStatus") || topic == QLatin1String("RobotDynamicStatus") || topic == QLatin1String("GlobalUnitStatus") || topic == QLatin1String("PenaltyInfo") || topic == QLatin1String("RobotInjuryStat")) && m_mqttManager &&
       (!m_mqttManager->isConnected() || m_mqttManager->clientId() != QString::number(m_gameData->getCurrentRobotId()))) {
     qWarning() << topic << "ignored: MQTT identity does not match current robot";
     return;
@@ -1276,7 +1276,7 @@ void NetworkManager::processMqttMessage(const QString &topic,
       m_gameData->recordMqttObservation(topic, 0, m_receiptWallMs, m_receiptMonotonicMs);
     else if (topic == QLatin1String("RobotStaticStatus"))
       m_gameData->recordMqttObservation(topic, parsedFields.value("robot_id").toInt(), m_receiptWallMs, m_receiptMonotonicMs);
-    else if (topic == QLatin1String("RobotDynamicStatus") || topic == QLatin1String("RobotModuleStatus") || topic == QLatin1String("GlobalUnitStatus"))
+    else if (topic == QLatin1String("RobotDynamicStatus") || topic == QLatin1String("RobotModuleStatus") || topic == QLatin1String("GlobalUnitStatus") || topic == QLatin1String("PenaltyInfo") || topic == QLatin1String("RobotInjuryStat"))
       m_gameData->recordMqttObservation(topic, m_gameData->getCurrentRobotId(), m_receiptWallMs, m_receiptMonotonicMs);
     else if (topic == QLatin1String("Event") && parsedFields.value("event_id").toInt() == 16)
       m_gameData->recordMqttObservation(QStringLiteral("Event16"), 0, m_receiptWallMs, m_receiptMonotonicMs);
@@ -1322,20 +1322,6 @@ void NetworkManager::processMqttMessage(const QString &topic,
       }
       m_gameData->updateGameState(gameInfo);
       m_gameData->updateGlobalLogisticsStatus(msg);
-    }
-  } else if (topic == "RobotInjuryStat") {
-    robomaster::RobotInjuryStat msg;
-    if (msg.ParseFromArray(payload.data(), payload.size())) {
-      dumpMqttEvent(
-          QStringLiteral("parsed"), topic, payload, m_gameData,
-          QStringLiteral("RobotInjuryStat killer_id=%1 total_damage=%2")
-              .arg(msg.killer_id())
-              .arg(msg.total_damage()),
-          QJsonObject{{QStringLiteral("killer_id"),
-                       static_cast<int>(msg.killer_id())},
-                      {QStringLiteral("total_damage"),
-                       static_cast<int>(msg.total_damage())}});
-      m_gameData->updateRobotInjury(msg);
     }
   } else if (topic == "RobotPosition") {
     robomaster::RobotPosition msg;
@@ -1513,33 +1499,6 @@ void NetworkManager::processMqttMessage(const QString &topic,
                       {QStringLiteral("intention"),
                        static_cast<int>(msg.intention())}});
       m_gameData->updateSentryPath(msg);
-    }
-  } else if (topic == "PenaltyInfo") {
-    robomaster::PenaltyInfo msg;
-    if (msg.ParseFromArray(payload.data(), payload.size())) {
-      dumpMqttEvent(
-          QStringLiteral("parsed"), topic, payload, m_gameData,
-          QStringLiteral("PenaltyInfo type=%1 effect_sec=%2 total_penalty_num=%3")
-              .arg(msg.penalty_type())
-              .arg(msg.penalty_effect_sec())
-              .arg(msg.total_penalty_num()),
-          QJsonObject{{QStringLiteral("penalty_type"),
-                       static_cast<int>(msg.penalty_type())},
-                      {QStringLiteral("penalty_effect_sec"),
-                       static_cast<int>(msg.penalty_effect_sec())},
-                      {QStringLiteral("total_penalty_num"),
-                       static_cast<int>(msg.total_penalty_num())}});
-      const QByteArray debugLog =
-          QStringLiteral("MQTT RX PenaltyInfo penaltyType=%1 "
-                         "effectSec=%2 totalPenaltyNum=%3 currentRobotId=%4")
-              .arg(msg.penalty_type())
-              .arg(msg.penalty_effect_sec())
-              .arg(msg.total_penalty_num())
-              .arg(m_gameData ? m_gameData->getMyRobotId() : 0)
-              .toUtf8();
-      qInfo() << "NetworkManager:" << debugLog;
-      emit dataReceived(debugLog);
-      m_gameData->updatePenalty(msg);
     }
   } else if (topic == "AirSupportStatusSync") {
     robomaster::AirSupportStatusSync msg;
