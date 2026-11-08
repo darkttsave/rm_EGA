@@ -257,12 +257,12 @@ message BaseHealth {
  * @topic RobotRespawnStatus
  */
 message RobotRespawnStatus {
-  bool is_pending_respawn = 1; // 是否处于待复活状态
-  uint32 total_respawn_progress = 2; // 复活所需总读条
-  uint32 current_respawn_progress = 3; // 当前复活读条进度
-  bool can_free_respawn = 4; // 是否可以免费复活
-  uint32 gold_cost_for_respawn = 5; // 花费金币复活所需金币数
-  bool can_pay_for_respawn = 6; // 是否允许花费金币复活
+  optional bool is_pending_respawn = 1; // 是否处于待复活状态
+  optional uint32 total_respawn_progress = 2; // 复活所需总读条
+  optional uint32 current_respawn_progress = 3; // 当前复活读条进度
+  optional bool can_free_respawn = 4; // 是否可以免费复活
+  optional uint32 gold_cost_for_respawn = 5; // 花费金币复活所需金币数
+  optional bool can_pay_for_respawn = 6; // 是否允许花费金币复活
 }
 
 /**

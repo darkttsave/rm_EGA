@@ -31,6 +31,7 @@ void captureDynamicCallback(QtMsgType, const QMessageLogContext &, const QString
   if (message.contains("RM26_MQTT_RX_TIMING direction=rx topic=GlobalUnitStatus")) observedQueuedTopics.fetch_or(32);
   if (message.contains("RM26_MQTT_RX_TIMING direction=rx topic=PenaltyInfo")) observedQueuedTopics.fetch_or(64);
   if (message.contains("RM26_MQTT_RX_TIMING direction=rx topic=RobotInjuryStat")) observedQueuedTopics.fetch_or(128);
+  if (message.contains("RM26_MQTT_RX_TIMING direction=rx topic=RobotRespawnStatus")) observedQueuedTopics.fetch_or(256);
 }
 QStringList detailedLogs;
 void captureDetails(QtMsgType type, const QMessageLogContext &, const QString &message) {
@@ -299,6 +300,11 @@ private slots:
     QTRY_COMPARE_WITH_TIMEOUT(topicMeta("PenaltyInfo").value("sessionState").toString(), QString("current"), 5000);
     QTRY_COMPARE_WITH_TIMEOUT(topicMeta("RobotInjuryStat").value("sessionState").toString(), QString("current"), 5000);
     QCOMPARE(data.injuryObservation().value("identity").toInt(), 1);
+    robomaster::RobotRespawnStatus respawn; respawn.set_is_pending_respawn(true); respawn.set_current_respawn_progress(12);
+    QVERIFY(publisher.publish("RobotRespawnStatus", bytes(respawn), 1));
+    QTRY_COMPARE_WITH_TIMEOUT(topicMeta("RobotRespawnStatus").value("sessionState").toString(), QString("current"), 5000);
+    QCOMPARE(data.respawnObservation().value("identity").toInt(), 1);
+    QVERIFY(data.robotRespawnStatus().isEmpty());
     data.setCurrentRobotId(101);
     QCOMPARE(topicMeta("RobotDynamicStatus").value("sessionState").toString(), QString("identity_changed"));
     QVERIFY(publisher.publish(QStringLiteral("RobotDynamicStatus"), bytes(msg), 1));
@@ -313,8 +319,9 @@ private slots:
     global.Clear(); global.add_robot_health(999); publisher.publish("GlobalUnitStatus", bytes(global), 1);
     penalty.set_penalty_type(3); injury.set_total_damage(999);
     publisher.publish("PenaltyInfo", bytes(penalty), 1); publisher.publish("RobotInjuryStat", bytes(injury), 1);
-    for (int i = 0; i < 100 && (observedQueuedTopics.load() & 225) != 225; ++i) QThread::msleep(10);
-    const bool identitySeen = (observedQueuedTopics.load() & 225) == 225;
+    respawn.set_current_respawn_progress(999); publisher.publish("RobotRespawnStatus", bytes(respawn), 1);
+    for (int i = 0; i < 100 && (observedQueuedTopics.load() & 481) != 481; ++i) QThread::msleep(10);
+    const bool identitySeen = (observedQueuedTopics.load() & 481) == 481;
     data.setCurrentRobotId(101); data.setCurrentRobotId(1);
     QCoreApplication::processEvents();
     qInstallMessageHandler(identityHandler);
@@ -324,6 +331,8 @@ private slots:
     QCOMPARE(data.injuryObservation().value("fields").toMap().value("total_damage").toMap().value("value").toUInt(), 10u);
     QCOMPARE(data.penaltyObservation().value("fields").toMap().value("penalty_type").toMap().value("value").toUInt(), 1u);
     QCOMPARE(topicMeta("PenaltyInfo").value("sessionState").toString(), QString("identity_changed"));
+    QCOMPARE(data.respawnObservation().value("fields").toMap().value("current_respawn_progress").toMap().value("value").toUInt(), 12u);
+    QCOMPARE(topicMeta("RobotRespawnStatus").value("sessionState").toString(), QString("identity_changed"));
     QCOMPARE(topicMeta("GlobalUnitStatus").value("sessionState").toString(), QString("identity_changed"));
     QCOMPARE(topicMeta("RobotDynamicStatus").value("sessionState").toString(), QString("identity_changed"));
     // Ensure a callback has queued the old message while the Qt thread remains blocked.
@@ -338,8 +347,9 @@ private slots:
     publisher.publish("RobotModuleStatus", bytes(queuedModule), 1);
     publisher.publish("GlobalUnitStatus", bytes(global), 1);
     publisher.publish("PenaltyInfo", bytes(penalty), 1); publisher.publish("RobotInjuryStat", bytes(injury), 1);
-    for (int i = 0; i < 200 && observedQueuedTopics.load() != 255; ++i) QThread::msleep(10);
-    const bool callbackSeen = dynamicCallbackObserved.load() && observedQueuedTopics.load() == 255;
+    publisher.publish("RobotRespawnStatus", bytes(respawn), 1);
+    for (int i = 0; i < 200 && observedQueuedTopics.load() != 511; ++i) QThread::msleep(10);
+    const bool callbackSeen = dynamicCallbackObserved.load() && observedQueuedTopics.load() == 511;
     network.stopMqtt();
     data.setCurrentRobotId(101);
     QCoreApplication::processEvents();
@@ -357,6 +367,11 @@ private slots:
     QCOMPARE(topicMeta("GlobalUnitStatus").value("sessionState").toString(), QString("historical"));
     QCOMPARE(topicMeta("PenaltyInfo").value("sessionState").toString(), QString("historical"));
     QCOMPARE(topicMeta("RobotInjuryStat").value("sessionState").toString(), QString("historical"));
+    QCOMPARE(topicMeta("RobotRespawnStatus").value("sessionState").toString(), QString("historical"));
+    QVERIFY(publisher.publish("RobotRespawnStatus", bytes(respawn), 1));
+    QTRY_COMPARE_WITH_TIMEOUT(topicMeta("RobotRespawnStatus").value("sessionState").toString(), QString("current"), 5000);
+    QCOMPARE(data.respawnObservation().value("identity").toInt(), 101);
+    QVERIFY(data.robotRespawnStatus().isEmpty());
     QVERIFY(publisher.publish("PenaltyInfo", bytes(penalty), 1)); QVERIFY(publisher.publish("RobotInjuryStat", bytes(injury), 1));
     QTRY_COMPARE_WITH_TIMEOUT(topicMeta("PenaltyInfo").value("sessionState").toString(), QString("current"), 5000);
     QTRY_COMPARE_WITH_TIMEOUT(topicMeta("RobotInjuryStat").value("sessionState").toString(), QString("current"), 5000);
@@ -396,6 +411,74 @@ private slots:
     network.stopMqtt(); publisher.disconnect();
   }
 #endif
+  void officialRespawnObservation() {
+    Q_INIT_RESOURCE(qml);
+    GameData data; data.setCurrentRobotId(1);
+    QQuickWidget panel; panel.rootContext()->setContextProperty("gameData", &data);
+    panel.setSource(QUrl(QStringLiteral("qrc:/qml/RM27DevPanel.qml")));
+    QCOMPARE(panel.status(), QQuickWidget::Ready);
+    std::function<QQuickItem *(QQuickItem *, const QString &)> findVisual = [&](QQuickItem *item, const QString &name) -> QQuickItem * {
+      if (item->objectName() == name) return item;
+      for (auto *child : item->childItems()) if (auto *found = findVisual(child, name)) return found;
+      return nullptr;
+    };
+    auto *total = findVisual(panel.rootObject(), "rm27Respawn_total_respawn_progress");
+    auto *pending = findVisual(panel.rootObject(), "rm27Respawn_is_pending_respawn");
+    QVERIFY(total); QVERIFY(pending);
+    robomaster::RobotRespawnStatus msg;
+    msg.set_is_pending_respawn(false); msg.set_total_respawn_progress(0); msg.set_current_respawn_progress(4294967295u);
+    msg.set_can_free_respawn(false); msg.set_gold_cost_for_respawn(4294967295u); msg.set_can_pay_for_respawn(true);
+    QSignalSpy oldStatus(&data, &GameData::robotRespawnStatusUpdated);
+    QCOMPARE(OfficialMessageHandler::handle("RobotRespawnStatus", bytes(msg), data), OfficialMessageHandler::Result::Parsed);
+    QCOMPARE(oldStatus.count(), 0); QVERIFY(data.robotRespawnStatus().isEmpty());
+    const auto fields = data.respawnObservation().value("fields").toMap();
+    for (const char *key : {"is_pending_respawn", "total_respawn_progress", "current_respawn_progress", "can_free_respawn", "gold_cost_for_respawn", "can_pay_for_respawn"})
+      QCOMPARE(fields.value(QLatin1String(key)).toMap().value("state").toString(), QString("valid"));
+    QCOMPARE(fields.value("current_respawn_progress").toMap().value("value").toUInt(), 4294967295u);
+    QCOMPARE(fields.value("gold_cost_for_respawn").toMap().value("value").toUInt(), 4294967295u);
+    QCOMPARE(fields.value("can_free_respawn").toMap().value("value").toBool(), false);
+    QTRY_VERIFY(pending->property("primary").toString().contains(QStringLiteral("false")));
+    QTRY_VERIFY(total->property("primary").toString().contains(QStringLiteral("总读条: 0")));
+    msg.Clear(); msg.set_current_respawn_progress(101); msg.set_can_free_respawn(true);
+    data.updateOfficialRespawnObservation(msg);
+    auto snap = data.respawnObservation();
+    QCOMPARE(snap.value("fields").toMap().value("total_respawn_progress").toMap().value("state").toString(), QString("unreported"));
+    QCOMPARE(snap.value("accepted").toMap().value("total_respawn_progress").toUInt(), 0u);
+    QCOMPARE(snap.value("accepted").toMap().value("can_pay_for_respawn").toBool(), true);
+    QTRY_VERIFY(total->property("primary").toString().contains(QStringLiteral("上次: 0")));
+    msg.Clear(); msg.set_total_respawn_progress(10); msg.set_current_respawn_progress(15); msg.set_can_pay_for_respawn(false);
+    data.updateOfficialRespawnObservation(msg);
+    snap = data.respawnObservation();
+    QCOMPARE(snap.value("accepted").toMap().value("total_respawn_progress").toUInt(), 10u);
+    QCOMPARE(snap.value("accepted").toMap().value("current_respawn_progress").toUInt(), 15u);
+    data.setCurrentRobotId(101); QVERIFY(!data.respawnObservation().value("identityMatches").toBool());
+    msg.Clear(); msg.set_current_respawn_progress(7); data.updateOfficialRespawnObservation(msg);
+    QVERIFY(!data.respawnObservation().value("accepted").toMap().contains("total_respawn_progress"));
+    QCOMPARE(OfficialMessageHandler::handle("RobotRespawnStatus", QByteArray::fromHex("1080"), data), OfficialMessageHandler::Result::ParseFailed);
+    QCOMPARE(oldStatus.count(), 0);
+    // A retained value keeps its own identity and receipt provenance.
+    data.setMqttSessionState(true, "101");
+    msg.Clear(); msg.set_total_respawn_progress(50); data.updateOfficialRespawnObservation(msg);
+    data.recordMqttObservation("RobotRespawnStatus", 101, 100000, 1000);
+    auto meta = data.mqttReceptionMetadata().value("topics").toMap().value("RobotRespawnStatus").toMap();
+    const auto firstStamp = meta.value("fieldUpdates").toMap().value("total_respawn_progress").toMap();
+    QVERIFY(firstStamp.value("receivedAt").toDateTime().isValid());
+    msg.Clear(); msg.set_current_respawn_progress(20); data.updateOfficialRespawnObservation(msg);
+    data.recordMqttObservation("RobotRespawnStatus", 101, 200000, 2000);
+    meta = data.mqttReceptionMetadata().value("topics").toMap().value("RobotRespawnStatus").toMap();
+    QCOMPARE(meta.value("fieldUpdates").toMap().value("total_respawn_progress").toMap(), firstStamp);
+    QCOMPARE(data.respawnObservation().value("acceptedSource").toMap().value("total_respawn_progress").toString(), QString("official_mqtt"));
+    msg.Clear(); msg.set_total_respawn_progress(60); data.updateOfficialRespawnObservation(msg);
+    msg.Clear(); msg.set_current_respawn_progress(21); data.updateOfficialRespawnObservation(msg);
+    data.recordMqttObservation("RobotRespawnStatus", 101, 300000, 3000);
+    QCOMPARE(data.respawnObservation().value("acceptedSource").toMap().value("total_respawn_progress").toString(), QString("protocol_unverified"));
+    data.setMqttSessionState(false, "101");
+    meta = data.mqttReceptionMetadata().value("topics").toMap().value("RobotRespawnStatus").toMap();
+    QCOMPARE(meta.value("sessionState").toString(), QString("disconnected"));
+    data.setMqttSessionState(true, "101");
+    meta = data.mqttReceptionMetadata().value("topics").toMap().value("RobotRespawnStatus").toMap();
+    QCOMPARE(meta.value("sessionState").toString(), QString("historical"));
+  }
   void penaltyAndInjuryObservations() {
     Q_INIT_RESOURCE(qml);
     GameData data; data.setCurrentRobotId(1);

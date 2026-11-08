@@ -5092,6 +5092,11 @@ bool MainWindow::isInputEventFromClientWindow(QObject *obj) const {
 }
 
 bool MainWindow::tryHandleRespawnShortcut(QKeyEvent *event) {
+  // RMUL respawn control is frozen until the protocol and target identity are confirmed.
+  Q_UNUSED(event);
+  return false;
+#if 0 // Retained for the future respawn-control review; never compiled while frozen.
+
   if (!event || event->isAutoRepeat() || !m_gameData || !m_networkManager) {
     return false;
   }
@@ -5168,6 +5173,7 @@ bool MainWindow::tryHandleRespawnShortcut(QKeyEvent *event) {
           << "currentRobotId=" << currentRobotId;
   m_networkManager->sendCommonCommand(cmdType, kDefaultRespawnRobotIndex);
   return true;
+#endif
 }
 
 int MainWindow::keyboardMouseBitForKey(int key) const {

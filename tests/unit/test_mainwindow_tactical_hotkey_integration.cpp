@@ -15,6 +15,7 @@
 #include <QKeyEvent>
 #include <QQuickItem>
 #include <QQuickWidget>
+#include <QQmlContext>
 #include <QSignalSpy>
 #include <QWidget>
 #include <QtTest>
@@ -31,6 +32,13 @@ int childStackIndex(QWidget *parent, QObject *child) {
 }
 
 } // namespace
+
+class RespawnCommandProbe : public QObject {
+  Q_OBJECT
+public:
+  int calls = 0;
+  Q_INVOKABLE void sendCommonCommand(int, int) { ++calls; }
+};
 
 class TestMainWindowTacticalHotkeyIntegration : public QObject {
   Q_OBJECT
@@ -146,6 +154,12 @@ private slots:
         QCOMPARE(ConfigManager::instance().getClientRobotId(), id);
       }
       QSignalSpy sent(network, &RM::NetworkManager::dataSent);
+      // Even a stale legacy qualification cannot dispatch from the shortcuts.
+      robomaster::RobotStaticStatus online; online.set_robot_id(101); online.set_connection_state(1);
+      data->updateRobotStaticStatus(online);
+      data->processRobotRespawnStatusMap({{"is_pending_respawn", true}, {"can_free_respawn", true}, {"can_pay_for_respawn", true}});
+      window.show(); QTest::keyClick(window.centralWidget(), Qt::Key_F1); QTest::keyClick(window.centralWidget(), Qt::Key_Y);
+      QCOMPARE(sent.count(), 0);
       network->sendAssemblyCommand(1, 1);
       network->sendHeroDeployMode(1);
       network->sendCommonCommand(2, 10);
@@ -177,6 +191,35 @@ private slots:
     broker.terminate();
     QVERIFY(broker.waitForFinished(5000));
 #endif
+  }
+
+  void testFrozenRespawnPanelButtonsAndKeys() {
+    GameData data; data.setCurrentRobotId(1);
+    RespawnCommandProbe probe;
+    QQuickWidget panel;
+    panel.setResizeMode(QQuickWidget::SizeRootObjectToView);
+    panel.resize(1000, 700);
+    panel.rootContext()->setContextProperty("gameData", &data);
+    panel.rootContext()->setContextProperty("network", &probe);
+    panel.setSource(QUrl(QStringLiteral("qrc:/qml/RobotRespawn.qml")));
+    QCOMPARE(panel.status(), QQuickWidget::Ready);
+    auto *root = panel.rootObject(); QVERIFY(root);
+    root->setProperty("isPendingRespawn", true);
+    root->setProperty("canPayForRespawn", true); root->setProperty("canFreeRespawn", true);
+    root->setProperty("robotOnline", true);
+    panel.show(); QTest::qWait(100);
+    std::function<QQuickItem *(QQuickItem *, const QString &)> findVisual = [&](QQuickItem *item, const QString &name) -> QQuickItem * {
+      if (item->objectName() == name) return item;
+      for (auto *child : item->childItems()) if (auto *found = findVisual(child, name)) return found;
+      return nullptr;
+    };
+    for (const auto *name : {"frozenPaidRespawnButton", "frozenFreeRespawnButton"}) {
+      auto *button = findVisual(root, QString::fromLatin1(name)); QVERIFY(button); QVERIFY(!button->property("enabled").toBool());
+      QTest::mouseClick(&panel, Qt::LeftButton, Qt::NoModifier,
+          button->mapToScene(QPointF(button->width()/2, button->height()/2)).toPoint());
+    }
+    panel.setFocus(); QTest::keyClick(&panel, Qt::Key_F1); QTest::keyClick(&panel, Qt::Key_Y);
+    QCOMPARE(probe.calls, 0);
   }
 
   void testRM27DevPanelGatingAndLiveData() {

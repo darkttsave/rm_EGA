@@ -484,6 +484,12 @@ ClientDevHooks::handleCommonCommand(const QHttpServerRequest &request) {
     return jsonError(QStringLiteral("Missing or invalid cmd_type"));
   }
 
+  // This generic development endpoint can otherwise bypass the frozen UI.
+  // Legacy CommonCommand 3/4 are the audited free/paid respawn actions.
+  if (cmdType == 3 || cmdType == 4) {
+    return jsonError(QStringLiteral("RMUL respawn control is frozen"), 403);
+  }
+
   m_networkManager->sendCommonCommand(cmdType, param);
   recordTraceEvent(QStringLiteral("common_command_dispatched"),
                    QJsonObject{{"cmd_type", cmdType}, {"param", param}});

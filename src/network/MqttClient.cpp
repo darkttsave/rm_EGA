@@ -261,19 +261,10 @@ void MqttClient::handlePayload(const QString &topic,
   }
 
   if (topic == QStringLiteral("RobotRespawnStatus")) {
-    robomaster::RobotRespawnStatus respawn;
-    if (respawn.ParseFromArray(payload.constData(), payload.size())) {
-      QVariantMap map;
-      map["is_pending_respawn"] = respawn.is_pending_respawn();
-      map["total_respawn_progress"] = static_cast<uint32_t>(respawn.total_respawn_progress());
-      map["current_respawn_progress"] = static_cast<uint32_t>(respawn.current_respawn_progress());
-      map["can_free_respawn"] = respawn.can_free_respawn();
-      map["gold_cost_for_respawn"] = static_cast<uint32_t>(respawn.gold_cost_for_respawn());
-      map["can_pay_for_respawn"] = respawn.can_pay_for_respawn();
-      m_gameData->processRobotRespawnStatusMap(map);
-      emit messageReceived(topic, payload.size());
-      return;
-    }
+    // Qt MQTT fallback has no per-message identity/session queue guard. Drop
+    // this topic rather than attach queued values to a different identity.
+    qWarning() << "RobotRespawnStatus ignored: Qt MQTT session isolation unavailable";
+    return;
   }
 
   // 情况A：统一封装的 RoboMasterMessage（包含 payload_case）

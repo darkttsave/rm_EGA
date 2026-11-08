@@ -41,6 +41,7 @@ class GlobalSpecialMechanism;
 class RadarInfoToClient;
 class RobotPathPlanInfo;
 class RobotInjuryStat;
+class RobotRespawnStatus;
 class RobotModuleStatus; // 模块状态 Protobuf 前向声明
 class RobotStaticStatus;
 class RobotDynamicStatus;
@@ -701,6 +702,7 @@ Q_PROPERTY(QVariantMap robotRespawnStatus READ robotRespawnStatus NOTIFY robotRe
   Q_PROPERTY(QVariantMap robotDynamicStatus READ robotDynamicStatus NOTIFY robotDynamicStatusChanged)
   Q_PROPERTY(QVariantMap gameStatusObservation READ gameStatusObservation NOTIFY gameStatusObservationChanged)
   Q_PROPERTY(QVariantMap mqttReceptionMetadata READ mqttReceptionMetadata NOTIFY mqttReceptionMetadataChanged)
+  Q_PROPERTY(QVariantMap respawnObservation READ respawnObservation NOTIFY respawnObservationChanged)
   Q_PROPERTY(QVariantMap penaltyObservation READ penaltyObservation NOTIFY penaltyObservationChanged)
   Q_PROPERTY(QVariantMap injuryObservation READ injuryObservation NOTIFY injuryObservationChanged)
   Q_PROPERTY(QVariantMap globalHealthObservation READ globalHealthObservation NOTIFY globalHealthObservationChanged)
@@ -728,6 +730,8 @@ public:
 
   QVariantMap mqttReceptionMetadata() const;
   QVariantMap globalHealthObservation() const;
+  QVariantMap respawnObservation() const;
+  void updateOfficialRespawnObservation(const robomaster::RobotRespawnStatus &data);
   QVariantMap penaltyObservation() const;
   QVariantMap injuryObservation() const;
   QVariantMap localHeatObservation() const { return m_localHeatObservation; }
@@ -1411,6 +1415,7 @@ signals:
   void currentRobotIdentityChanged();
   void mqttReceptionMetadataChanged();
   void globalHealthObservationChanged();
+  void respawnObservationChanged();
   void penaltyObservationChanged();
   void injuryObservationChanged();
   void localHeatObservationChanged();
@@ -1527,6 +1532,7 @@ private:
 
   // 0x0101 场地事件数据缓存
   quint32 m_eventData = 0;
+  QVariantMap m_respawnObservation;
   QVariantMap m_penaltyObservation;
   QVariantMap m_injuryObservation;
   bool m_globalHealthReceived = false;

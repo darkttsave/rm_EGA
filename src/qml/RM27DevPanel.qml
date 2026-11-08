@@ -80,7 +80,7 @@ Rectangle {
                       "\n时间为本机接收时间；当前会话不代表实时有效。"
             }
             Repeater {
-                model: ["GameStatus", "GlobalUnitStatus", "RobotDynamicStatus", "RobotStaticStatus", "RobotModuleStatus", "PenaltyInfo", "RobotInjuryStat", "Event16"]
+                model: ["GameStatus", "GlobalUnitStatus", "RobotDynamicStatus", "RobotStaticStatus", "RobotModuleStatus", "PenaltyInfo", "RobotInjuryStat", "RobotRespawnStatus", "Event16"]
                 delegate: Text {
                     required property string modelData
                     property var meta: { root.revision; return root.dataSource ? root.dataSource.mqttReceptionMetadata : ({}) }
@@ -250,6 +250,42 @@ Rectangle {
                             detail: !item || item.state === "unreported" ? "未上报" : modelData.key === "killer_id" ? "valid · " + (item.identityKind === "unknown" ? "未知身份" : item.identityName) : "valid"
                         }
                     }
+                }
+            }
+            SourceCard {
+                title: "复活状态 · 官方观测（控制已冻结）"
+                Column {
+                    id: respawnSection
+                    width: parent.width; spacing: 6
+                    property var snapshot: root.dataSource ? root.dataSource.respawnObservation : ({})
+                    property var receipt: root.dataSource ? ((root.dataSource.mqttReceptionMetadata.topics || ({})).RobotRespawnStatus || ({})) : ({})
+                    SourceRow {
+                        objectName: "rm27RespawnSession"
+                        primary: "终端关联身份: " + (respawnSection.snapshot.received ? respawnSection.snapshot.identity : "未收到") + (respawnSection.snapshot.received && !respawnSection.snapshot.identityMatches ? "（旧身份）" : "")
+                        detail: respawnSection.snapshot.source === "official_mqtt" ? "会话: " + (respawnSection.receipt.sessionState || "never") + (respawnSection.receipt.receivedAt ? " · 本机接收 " + Qt.formatDateTime(respawnSection.receipt.receivedAt, "HH:mm:ss.zzz") : "") : "来源未确认"
+                    }
+                    Repeater {
+                        model: [
+                            {key:"is_pending_respawn", name:"待复活", boolean:true},
+                            {key:"total_respawn_progress", name:"总读条", boolean:false},
+                            {key:"current_respawn_progress", name:"当前读条", boolean:false},
+                            {key:"can_free_respawn", name:"允许免费复活", boolean:true},
+                            {key:"gold_cost_for_respawn", name:"金币复活费用", boolean:false},
+                            {key:"can_pay_for_respawn", name:"允许金币复活", boolean:true}
+                        ]
+                        delegate: SourceRow {
+                            required property var modelData
+                            property var item: (respawnSection.snapshot.fields || ({}))[modelData.key]
+                            property var previous: (respawnSection.snapshot.accepted || ({}))[modelData.key]
+                            property var previousSource: (respawnSection.snapshot.acceptedSource || ({}))[modelData.key]
+                            property var previousReceipt: (respawnSection.receipt.fieldUpdates || ({}))[modelData.key]
+                            function showValue(v) { return modelData.boolean ? (v ? "true" : "false") : String(v) }
+                            objectName: "rm27Respawn_" + modelData.key
+                            primary: modelData.name + ": " + (!item || item.state === "unreported" ? "未上报" + (previous === undefined ? "" : "（上次: " + showValue(previous) + "）") : showValue(item.value))
+                            detail: !item || item.state === "unreported" ? (previous === undefined ? "未上报" : previousSource === "official_mqtt" && previousReceipt ? "上次有效 · 会话 " + previousReceipt.session + " · 本机接收 " + Qt.formatDateTime(previousReceipt.receivedAt, "HH:mm:ss.zzz") : "上次有效 · 来源未确认") : "valid"
+                        }
+                    }
+                    SourceRow { primary: "复活操作已冻结"; detail: "资格字段仅为观测，不代表已执行命令" }
                 }
             }
             Text { text: "全局比赛状态（官方 GameStatus 观测）"; color: "#8de0ff"; font.pixelSize: 21 }

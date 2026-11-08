@@ -43,6 +43,7 @@ Item {
     // qmllint enable unqualified
 
     // === 数据绑定 ===
+    readonly property bool respawnControlFrozen: true
     property bool isPendingRespawn: false
     property int totalRespawnProgress: 100
     property int currentRespawnProgress: 0
@@ -145,6 +146,10 @@ Item {
         focus: root.visible
 
         Keys.onReleased: function(event) {
+            if (root.respawnControlFrozen && (event.key === Qt.Key_F1 || event.key === Qt.Key_Y)) {
+                event.accepted = true
+                return
+            }
             // F1 快捷键：金币买活（cmd_type=4）
             if (event.key === Qt.Key_F1 && root.canPayForRespawn && !root.sending && root.robotOnline) {
                 root.sending = true
@@ -257,7 +262,7 @@ Item {
                         Layout.preferredHeight: 44
                         radius: 6
                         // 若机器人离线，则按钮置灰
-                        color: (root.canPayForRespawn && root.robotOnline) ? "#D32F2F" : "#777777"
+                        color: (!root.respawnControlFrozen && root.canPayForRespawn && root.robotOnline) ? "#D32F2F" : "#777777"
                         scale: 1.0
                         Behavior on scale { NumberAnimation { duration: 120 } }
                         opacity: (root.sending && root.canPayForRespawn) ? 0.7 : 1.0
@@ -265,7 +270,8 @@ Item {
 
                         MouseArea {
                             anchors.fill: parent
-                            enabled: (root.canPayForRespawn && !root.sending && root.robotOnline)
+                            objectName: "frozenPaidRespawnButton"
+                            enabled: !root.respawnControlFrozen && (root.canPayForRespawn && !root.sending && root.robotOnline)
                             onPressed: { parent.scale = 0.97 }
                             onReleased: { parent.scale = 1.0 }
                             onClicked: {
@@ -284,7 +290,7 @@ Item {
 
                         Text {
                             anchors.centerIn: parent
-                            text: (!root.robotOnline) ? (root.goldCostForRespawn + " 已离线") : (root.canPayForRespawn ? (root.goldCostForRespawn + "金币买活[F1]") : (root.goldCostForRespawn + "金币不足"))
+                            text: root.respawnControlFrozen ? "金币复活暂不可用" : (!root.robotOnline) ? (root.goldCostForRespawn + " 已离线") : (root.canPayForRespawn ? (root.goldCostForRespawn + "金币买活[F1]") : (root.goldCostForRespawn + "金币不足"))
                             color: "#FFFFFF"
                             font.pixelSize: 16
                             font.bold: true
@@ -297,14 +303,15 @@ Item {
                         Layout.fillWidth: true
                         Layout.preferredHeight: 44
                         radius: 6
-                        color: (root.canFreeRespawn && root.robotOnline) ? "#00FFFF" : "#777777"
+                        color: (!root.respawnControlFrozen && root.canFreeRespawn && root.robotOnline) ? "#00FFFF" : "#777777"
                         scale: 1.0
                         Behavior on scale { NumberAnimation { duration: 120 } }
                         opacity: (root.sending && root.canFreeRespawn) ? 0.7 : 1.0
 
                         MouseArea {
                             anchors.fill: parent
-                            enabled: (root.canFreeRespawn && root.robotOnline) && !root.sending
+                            objectName: "frozenFreeRespawnButton"
+                            enabled: !root.respawnControlFrozen && (root.canFreeRespawn && root.robotOnline) && !root.sending
                             onPressed: { parent.scale = 0.97 }
                             onReleased: { parent.scale = 1.0 }
                             onClicked: {
@@ -322,7 +329,7 @@ Item {
 
                         Text {
                             anchors.centerIn: parent
-                            text: root.robotOnline ? "免费复活[Y]" : "等待恢复"
+                            text: root.respawnControlFrozen ? "免费复活暂不可用" : root.robotOnline ? "免费复活[Y]" : "等待恢复"
                             color: "#FFFFFF"
                             font.pixelSize: 16
                             font.bold: true

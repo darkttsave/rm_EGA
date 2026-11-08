@@ -1241,7 +1241,7 @@ void NetworkManager::processMqttMessage(const QString &topic,
   }
   dumpMqttEvent(QStringLiteral("received"), topic, payload, m_gameData);
 
-  if ((topic == QLatin1String("RobotModuleStatus") || topic == QLatin1String("RobotDynamicStatus") || topic == QLatin1String("GlobalUnitStatus") || topic == QLatin1String("PenaltyInfo") || topic == QLatin1String("RobotInjuryStat")) && m_mqttManager &&
+  if ((topic == QLatin1String("RobotModuleStatus") || topic == QLatin1String("RobotDynamicStatus") || topic == QLatin1String("GlobalUnitStatus") || topic == QLatin1String("PenaltyInfo") || topic == QLatin1String("RobotInjuryStat") || topic == QLatin1String("RobotRespawnStatus")) && m_mqttManager &&
       (!m_mqttManager->isConnected() || m_mqttManager->clientId() != QString::number(m_gameData->getCurrentRobotId()))) {
     qWarning() << topic << "ignored: MQTT identity does not match current robot";
     return;
@@ -1276,7 +1276,7 @@ void NetworkManager::processMqttMessage(const QString &topic,
       m_gameData->recordMqttObservation(topic, 0, m_receiptWallMs, m_receiptMonotonicMs);
     else if (topic == QLatin1String("RobotStaticStatus"))
       m_gameData->recordMqttObservation(topic, parsedFields.value("robot_id").toInt(), m_receiptWallMs, m_receiptMonotonicMs);
-    else if (topic == QLatin1String("RobotDynamicStatus") || topic == QLatin1String("RobotModuleStatus") || topic == QLatin1String("GlobalUnitStatus") || topic == QLatin1String("PenaltyInfo") || topic == QLatin1String("RobotInjuryStat"))
+    else if (topic == QLatin1String("RobotDynamicStatus") || topic == QLatin1String("RobotModuleStatus") || topic == QLatin1String("GlobalUnitStatus") || topic == QLatin1String("PenaltyInfo") || topic == QLatin1String("RobotInjuryStat") || topic == QLatin1String("RobotRespawnStatus"))
       m_gameData->recordMqttObservation(topic, m_gameData->getCurrentRobotId(), m_receiptWallMs, m_receiptMonotonicMs);
     else if (topic == QLatin1String("Event") && parsedFields.value("event_id").toInt() == 16)
       m_gameData->recordMqttObservation(QStringLiteral("Event16"), 0, m_receiptWallMs, m_receiptMonotonicMs);
@@ -1527,55 +1527,6 @@ void NetworkManager::processMqttMessage(const QString &topic,
   }
 
   // 其他 Topic 可以后续添加处理逻辑
-
-  // 处理 RobotRespawnStatus（单一 topic）
-  if (topic.startsWith("RobotRespawnStatus")) {
-    qDebug() << "NetworkManager: RobotRespawnStatus payload size" << payload.size() << "topic" << topic;
-
-    robomaster::RobotRespawnStatus respMsg;
-    if (respMsg.ParseFromArray(payload.data(), payload.size())) {
-      dumpMqttEvent(
-          QStringLiteral("parsed"), topic, payload, m_gameData,
-          QStringLiteral("RobotRespawnStatus pending=%1 current=%2 total=%3")
-              .arg(respMsg.is_pending_respawn())
-              .arg(respMsg.current_respawn_progress())
-              .arg(respMsg.total_respawn_progress()),
-          QJsonObject{{QStringLiteral("is_pending_respawn"),
-                       respMsg.is_pending_respawn()},
-                      {QStringLiteral("current_respawn_progress"),
-                       static_cast<int>(respMsg.current_respawn_progress())},
-                      {QStringLiteral("total_respawn_progress"),
-                       static_cast<int>(respMsg.total_respawn_progress())}});
-      qDebug() << "NetworkManager: RobotRespawnStatus parsed as protobuf";
-      QVariantMap map;
-      // 始终传递 is_pending_respawn（用于显示/隐藏复活读条）
-      map["is_pending_respawn"] = respMsg.is_pending_respawn();
-
-      // 仅在 protobuf 中包含非零进度或处于 pending 状态时才传递进度字段，避免将缺省 0 值当作有效更新覆盖本地进度
-      // 否则让 GameData::processRobotRespawnStatusMap 使用上次缓存的值
-      if (respMsg.total_respawn_progress() > 0 || respMsg.is_pending_respawn()) {
-        map["total_respawn_progress"] = static_cast<uint32_t>(respMsg.total_respawn_progress());
-      }
-      if (respMsg.current_respawn_progress() > 0 || respMsg.is_pending_respawn()) {
-        map["current_respawn_progress"] = static_cast<uint32_t>(respMsg.current_respawn_progress());
-      }
-
-      // 布尔/费用字段始终透传，确保客户端状态严格跟随上游消息。
-      map["can_free_respawn"] = respMsg.can_free_respawn();
-      map["gold_cost_for_respawn"] = static_cast<uint32_t>(respMsg.gold_cost_for_respawn());
-      map["can_pay_for_respawn"] = respMsg.can_pay_for_respawn();
-
-      // robot_id 优先使用本地已知 myRobotId（避免 protobuf 默认 0 覆盖）
-      int myRobotId = m_gameData ? m_gameData->getMyRobotId() : 0;
-      if (myRobotId > 0) map["robot_id"] = QString::number(myRobotId);
-      m_gameData->processRobotRespawnStatusMap(map);
-    } else {
-        dumpMqttEvent(
-            QStringLiteral("parse_failed"), topic, payload, m_gameData,
-            QStringLiteral("RobotRespawnStatus parse failed"));
-        qWarning() << "NetworkManager: Failed to parse RobotRespawnStatus as protobuf";
-    }
-  }
 
   dumpMqttEvent(QStringLiteral("completed"), topic, payload, m_gameData,
                 QStringLiteral("Topic processing finished"));

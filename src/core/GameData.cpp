@@ -553,6 +553,7 @@ void GameData::setCurrentRobotId(qint64 robotId) {
   m_currentRobotId = next;
   ++m_mqttIdentityEpoch;
   emit globalHealthObservationChanged();
+  emit respawnObservationChanged();
   emit penaltyObservationChanged();
   emit injuryObservationChanged();
   emit currentRobotIdentityChanged();
@@ -1961,6 +1962,31 @@ void GameData::updateRobotStaticStatus(const robomaster::RobotStaticStatus &data
 }
 }
 
+QVariantMap GameData::respawnObservation() const {
+  QVariantMap result = m_respawnObservation;
+  result["identityMatches"] = result.value("received").toBool() && result.value("identity").toInt() == m_currentRobotId && result.value("identityEpoch").toULongLong() == m_mqttIdentityEpoch;
+  return result;
+}
+
+void GameData::updateOfficialRespawnObservation(const robomaster::RobotRespawnStatus &data) {
+  const auto receiver = RM::resolveRobotIdentity(m_currentRobotId);
+  if (receiver.kind != RM::IdentityKind::Robot || !receiver.team) return;
+  const bool sameIdentity = m_respawnObservation.value("received").toBool() && m_respawnObservation.value("identityEpoch").toULongLong() == m_mqttIdentityEpoch;
+  QVariantMap accepted = sameIdentity ? m_respawnObservation.value("accepted").toMap() : QVariantMap{};
+  QVariantMap acceptedSource = sameIdentity ? m_respawnObservation.value("acceptedSource").toMap() : QVariantMap{};
+  QVariantMap fields;
+  auto observe = [&](const char *name, bool present, const QVariant &value) {
+    const QString key = QString::fromLatin1(name);
+    fields[key] = present ? QVariantMap{{"state", "valid"}, {"value", value}} : QVariantMap{{"state", "unreported"}};
+    if (present) { accepted[key] = value; acceptedSource[key] = QStringLiteral("protocol_unverified"); }
+  };
+#define OBSERVE_RESPAWN(field) observe(#field, data.has_##field(), QVariant::fromValue(data.field()))
+  OBSERVE_RESPAWN(is_pending_respawn); OBSERVE_RESPAWN(total_respawn_progress); OBSERVE_RESPAWN(current_respawn_progress);
+  OBSERVE_RESPAWN(can_free_respawn); OBSERVE_RESPAWN(gold_cost_for_respawn); OBSERVE_RESPAWN(can_pay_for_respawn);
+#undef OBSERVE_RESPAWN
+  m_respawnObservation = {{"received", true}, {"identity", m_currentRobotId}, {"identityEpoch", QVariant::fromValue(m_mqttIdentityEpoch)}, {"source", "protocol_unverified"}, {"fields", fields}, {"accepted", accepted}, {"acceptedSource", acceptedSource}};
+  emit respawnObservationChanged();
+}
 QVariantMap GameData::penaltyObservation() const {
   QVariantMap result = m_penaltyObservation;
   result["identityMatches"] = result.value("identity").toInt() == m_currentRobotId && result.value("identityEpoch").toULongLong() == m_mqttIdentityEpoch;
@@ -2016,10 +2042,10 @@ QVariantMap GameData::mqttReceptionMetadata() const {
     return record;
   };
   QVariantMap topics;
-  for (const char *name : {"GameStatus", "RobotDynamicStatus", "RobotModuleStatus", "GlobalUnitStatus", "PenaltyInfo", "RobotInjuryStat", "Event16"}) {
+  for (const char *name : {"GameStatus", "RobotDynamicStatus", "RobotModuleStatus", "GlobalUnitStatus", "PenaltyInfo", "RobotInjuryStat", "RobotRespawnStatus", "Event16"}) {
     const QString key = QString::fromLatin1(name);
     topics[key] = annotate(m_mqttTopicMetadata.value(key).toMap(),
-        key == QLatin1String("RobotDynamicStatus") || key == QLatin1String("RobotModuleStatus") || key == QLatin1String("GlobalUnitStatus") || key == QLatin1String("PenaltyInfo") || key == QLatin1String("RobotInjuryStat"));
+        key == QLatin1String("RobotDynamicStatus") || key == QLatin1String("RobotModuleStatus") || key == QLatin1String("GlobalUnitStatus") || key == QLatin1String("PenaltyInfo") || key == QLatin1String("RobotInjuryStat") || key == QLatin1String("RobotRespawnStatus"));
   }
   QVariantMap staticRobots;
   for (auto it = m_mqttStaticMetadata.cbegin(); it != m_mqttStaticMetadata.cend(); ++it)
@@ -2032,7 +2058,7 @@ QVariantMap GameData::mqttReceptionMetadata() const {
 void GameData::recordMqttObservation(const QString &topic, int identity, qint64 receivedMs, qint64 monotonicMs) {
   if (!m_mqttSessionConnected || receivedMs <= 0) return;
   const bool isStatic = topic == QLatin1String("RobotStaticStatus");
-  const bool isIdentityScoped = topic == QLatin1String("RobotDynamicStatus") || topic == QLatin1String("RobotModuleStatus") || topic == QLatin1String("GlobalUnitStatus") || topic == QLatin1String("PenaltyInfo") || topic == QLatin1String("RobotInjuryStat");
+  const bool isIdentityScoped = topic == QLatin1String("RobotDynamicStatus") || topic == QLatin1String("RobotModuleStatus") || topic == QLatin1String("GlobalUnitStatus") || topic == QLatin1String("PenaltyInfo") || topic == QLatin1String("RobotInjuryStat") || topic == QLatin1String("RobotRespawnStatus");
   if (isIdentityScoped) {
     const auto resolved = RM::resolveRobotIdentity(identity);
     if (resolved.kind != RM::IdentityKind::Robot || !resolved.team) return;
@@ -2066,8 +2092,18 @@ void GameData::recordMqttObservation(const QString &topic, int identity, qint64 
   }
   if (topic == QLatin1String("PenaltyInfo")) { m_penaltyObservation["source"] = QStringLiteral("official_mqtt"); emit penaltyObservationChanged(); }
   if (topic == QLatin1String("RobotInjuryStat")) { m_injuryObservation["source"] = QStringLiteral("official_mqtt"); emit injuryObservationChanged(); }
+  if (topic == QLatin1String("RobotRespawnStatus")) {
+    m_respawnObservation["source"] = QStringLiteral("official_mqtt");
+    auto acceptedSource = m_respawnObservation.value("acceptedSource").toMap();
+    const auto observed = m_respawnObservation.value("fields").toMap();
+    for (auto it = observed.cbegin(); it != observed.cend(); ++it)
+      if (it.value().toMap().value("state") == QLatin1String("valid")) acceptedSource[it.key()] = QStringLiteral("official_mqtt");
+    m_respawnObservation["acceptedSource"] = acceptedSource;
+    emit respawnObservationChanged();
+  }
   QVariantMap fields;
-  if (topic == QLatin1String("PenaltyInfo")) fields = m_penaltyObservation.value("fields").toMap();
+  if (topic == QLatin1String("RobotRespawnStatus")) fields = m_respawnObservation.value("fields").toMap();
+  else if (topic == QLatin1String("PenaltyInfo")) fields = m_penaltyObservation.value("fields").toMap();
   else if (topic == QLatin1String("RobotInjuryStat")) fields = m_injuryObservation.value("fields").toMap();
   else if (topic == QLatin1String("GlobalUnitStatus")) fields = m_globalHealthFields;
   else if (topic == QLatin1String("GameStatus")) fields = m_gameStatusFields;
@@ -3878,16 +3914,7 @@ void GameData::processProtocolData(
     updateRobotModuleStatus(message.robot_module_status());
   } break;
   case robomaster::RoboMasterMessage::kRobotRespawnStatus: {
-    // 将 protobuf 字段转换为 QVariantMap 并转发
-    const auto &r = message.robot_respawn_status();
-    QVariantMap map;
-    map["is_pending_respawn"] = r.is_pending_respawn();
-    map["total_respawn_progress"] = static_cast<uint32_t>(r.total_respawn_progress());
-    map["current_respawn_progress"] = static_cast<uint32_t>(r.current_respawn_progress());
-    map["can_free_respawn"] = r.can_free_respawn();
-    map["gold_cost_for_respawn"] = static_cast<uint32_t>(r.gold_cost_for_respawn());
-    map["can_pay_for_respawn"] = r.can_pay_for_respawn();
-    processRobotRespawnStatusMap(map);
+    updateOfficialRespawnObservation(message.robot_respawn_status());
   } break;
   case robomaster::RoboMasterMessage::kTechCoreMotionStateSync: {
     updateTechCoreMotionStateSync(message.tech_core_motion_state_sync());

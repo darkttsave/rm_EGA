@@ -18,6 +18,17 @@ QJsonArray repeatedFieldToJsonArray(const RepeatedFieldT &field) {
 OfficialMessageHandler::Result OfficialMessageHandler::handle(
     const QString &topic, const QByteArray &payload, GameData &gameData,
     const ParsedLogger &logger, const GameStatusCacheUpdater &cacheUpdater) {
+  if (topic == QLatin1String("RobotRespawnStatus")) {
+    robomaster::RobotRespawnStatus msg;
+    if (!msg.ParseFromArray(payload.data(), payload.size())) return Result::ParseFailed;
+    if (logger) logger(QStringLiteral("RobotRespawnStatus pending=%1 progress=%2/%3")
+        .arg(msg.is_pending_respawn()).arg(msg.current_respawn_progress()).arg(msg.total_respawn_progress()),
+        {{QStringLiteral("has_pending"), msg.has_is_pending_respawn()},
+         {QStringLiteral("current_respawn_progress"), static_cast<qint64>(msg.current_respawn_progress())},
+         {QStringLiteral("total_respawn_progress"), static_cast<qint64>(msg.total_respawn_progress())}});
+    gameData.updateOfficialRespawnObservation(msg);
+    return Result::Parsed;
+  }
   if (topic == QLatin1String("PenaltyInfo")) {
     robomaster::PenaltyInfo msg;
     if (!msg.ParseFromArray(payload.data(), payload.size())) return Result::ParseFailed;
