@@ -20,7 +20,43 @@ Item {
     // gameData 由 MainWindow 注入，顶部栏统一从这个入口读取比赛状态。
     // qmllint disable unqualified
     readonly property var gameDataContext: typeof gameData !== "undefined" ? gameData : null
+    readonly property var uiConfigContext: typeof uiConfig !== "undefined" ? uiConfig : null
     // qmllint enable unqualified
+    readonly property string competitionUiMode: uiConfigContext ? uiConfigContext.competitionUiMode : "rmul"
+    readonly property var officialGame: gameDataContext ? gameDataContext.gameStatusObservation : ({})
+    readonly property var globalObservation: gameDataContext ? gameDataContext.globalHealthObservation : ({})
+    readonly property var mqttMeta: gameDataContext ? gameDataContext.mqttReceptionMetadata : ({})
+    readonly property var gameReceipt: (mqttMeta.topics || ({})).GameStatus || ({})
+    readonly property var globalReceipt: (mqttMeta.topics || ({})).GlobalUnitStatus || ({})
+    function officialField(fields, receipt, key, identityOk) {
+        var field = (fields || ({}))[key] || ({})
+        if (field.state === "invalid") return "无效"
+        if (field.state !== "valid") return "未上报"
+        if (!identityOk) return "身份不匹配"
+        if (receipt.sessionState === "current") return String(field.value)
+        if (receipt.sessionState === "historical" || receipt.sessionState === "disconnected") return String(field.value) + " (历史)"
+        return "来源未确认"
+    }
+    function gameField(key) { return officialField(officialGame.fields, gameReceipt, key, true) }
+    function globalField(key) { return officialField(globalObservation.rawFields, globalReceipt, key, globalObservation.identityMatches === true) }
+    readonly property string rmulStage: gameField("current_stage")
+    readonly property string rmulStageLabel: {
+        var f = (officialGame.fields || ({})).current_stage || ({})
+        if (f.state !== "valid" || (gameReceipt.sessionState !== "current" && gameReceipt.sessionState !== "historical" && gameReceipt.sessionState !== "disconnected")) return rmulStage
+        var names = ["未开始", "准备阶段", "裁判自检", "五秒倒计时", "比赛中", "比赛结算"]
+        return names[Number(f.value)] + (gameReceipt.sessionState === "current" ? "" : " (历史)")
+    }
+    readonly property string rmulRedScore: gameField("red_score")
+    readonly property string rmulBlueScore: gameField("blue_score")
+    readonly property string rmulAllyControl: globalField("total_cp_ally")
+    readonly property string rmulEnemyControl: globalField("total_cp_enemy")
+    readonly property string rmulTime: {
+        var raw = gameField("stage_countdown_sec")
+        var f = (officialGame.fields || ({})).stage_countdown_sec || ({})
+        if (f.state !== "valid" || Number(f.value) < 0 || (gameReceipt.sessionState !== "current" && gameReceipt.sessionState !== "historical" && gameReceipt.sessionState !== "disconnected")) return raw
+        var n = Number(f.value)
+        return Math.floor(n / 60) + ":" + (n % 60 < 10 ? "0" : "") + (n % 60) + (gameReceipt.sessionState === "current" ? "" : " (历史)")
+    }
     property int redBaseHP: gameDataContext ? gameDataContext.redBaseHealth : 2500
     property int redBaseMaxHP: gameDataContext ? gameDataContext.redBaseMaxHealth : 5000
     property int blueBaseHP: gameDataContext ? gameDataContext.blueBaseHealth : 3000
@@ -82,6 +118,59 @@ Item {
     }
 
     Item {
+        objectName: "rmulTopInfo"
+        visible: root.competitionUiMode === "rmul"
+        anchors.fill: parent
+        anchors.margins: 8
+        RowLayout {
+            anchors.horizontalCenter: parent.horizontalCenter
+            anchors.top: parent.top
+            width: Math.min(parent.width, 900)
+            height: 98
+            spacing: 8
+            Rectangle {
+                Layout.fillWidth: true; Layout.fillHeight: true; radius: 5
+                color: "#b31b2731"; border.color: "#9c4747"
+                Column {
+                    anchors.centerIn: parent; spacing: 3
+                    Text { anchors.horizontalCenter: parent.horizontalCenter; text: "红方比分"; color: "#ffaaaa"; font.pixelSize: 14 }
+                    Text { objectName: "rmulRedScore"; anchors.horizontalCenter: parent.horizontalCenter; text: root.rmulRedScore; color: "white"; font.pixelSize: 19 }
+                }
+            }
+            Rectangle {
+                Layout.preferredWidth: Math.min(340, parent.width * 0.4); Layout.fillHeight: true; radius: 5
+                color: "#d015242d"; border.color: "#568b9f"
+                Column {
+                    anchors.centerIn: parent; spacing: 3
+                    Text { objectName: "rmulGameStage"; anchors.horizontalCenter: parent.horizontalCenter; text: root.rmulStageLabel + "  ·  第 " + root.gameField("current_round") + " 局"; color: "#a2dff2"; font.pixelSize: 13 }
+                    Text { objectName: "rmulGameTime"; anchors.horizontalCenter: parent.horizontalCenter; text: root.rmulTime; color: "white"; font.pixelSize: 24; font.bold: true }
+                    Text { anchors.horizontalCenter: parent.horizontalCenter; text: "比赛状态 · 官方观测"; color: "#a2b9c3"; font.pixelSize: 11 }
+                }
+            }
+            Rectangle {
+                Layout.fillWidth: true; Layout.fillHeight: true; radius: 5
+                color: "#b31b2731"; border.color: "#467b9c"
+                Column {
+                    anchors.centerIn: parent; spacing: 3
+                    Text { anchors.horizontalCenter: parent.horizontalCenter; text: "蓝方比分"; color: "#91d6ff"; font.pixelSize: 14 }
+                    Text { objectName: "rmulBlueScore"; anchors.horizontalCenter: parent.horizontalCenter; text: root.rmulBlueScore; color: "white"; font.pixelSize: 19 }
+                }
+            }
+        }
+        Text {
+            objectName: "rmulControlDegree"
+            anchors.horizontalCenter: parent.horizontalCenter
+            anchors.top: parent.top; anchors.topMargin: 106
+            width: parent.width; horizontalAlignment: Text.AlignHCenter
+            elide: Text.ElideRight
+            text: "己方累计控制度 " + root.rmulAllyControl + "     ·     对方累计控制度 " + root.rmulEnemyControl
+            color: "#c6dde6"; font.pixelSize: 14
+        }
+    }
+
+    Item {
+        objectName: "rmucLegacyTopInfo"
+        visible: root.competitionUiMode === "rmuc"
         anchors.fill: parent
         anchors.leftMargin: 12
         anchors.rightMargin: 12

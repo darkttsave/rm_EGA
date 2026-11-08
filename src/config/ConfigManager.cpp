@@ -30,10 +30,40 @@ ConfigManager &ConfigManager::instance() {
 
 ConfigManager::ConfigManager(QObject *parent)
     : QObject(parent), m_watcher(new QFileSystemWatcher(this)) {
+  connect(this, &ConfigManager::configReloaded, this, &ConfigManager::competitionUiModeChanged);
   connect(m_watcher, &QFileSystemWatcher::fileChanged, this,
           &ConfigManager::onFileChanged);
   // 默认加载
   loadConfig();
+}
+
+QString ConfigManager::competitionUiMode() const {
+  const QString mode = m_config.value("ui").toObject().value("competition_mode").toString();
+  return mode == QLatin1String("rmuc") ? QStringLiteral("rmuc") : QStringLiteral("rmul");
+}
+
+bool ConfigManager::setCompetitionUiMode(const QString &mode) {
+  if (mode != QLatin1String("rmul") && mode != QLatin1String("rmuc")) return false;
+  {
+    QMutexLocker locker(&m_mutex);
+    if (m_currentConfigPath.isEmpty()) return false;
+    QFile source(m_currentConfigPath);
+    if (!source.open(QIODevice::ReadOnly)) return false;
+    QJsonParseError error;
+    const QJsonDocument doc = QJsonDocument::fromJson(source.readAll(), &error);
+    source.close();
+    if (error.error != QJsonParseError::NoError || !doc.isObject()) return false;
+    QJsonObject updated = doc.object();
+    QJsonObject ui = updated.value("ui").toObject();
+    ui["competition_mode"] = mode;
+    updated["ui"] = ui;
+    QSaveFile destination(m_currentConfigPath);
+    const QByteArray bytes = QJsonDocument(updated).toJson();
+    if (!destination.open(QIODevice::WriteOnly) || destination.write(bytes) != bytes.size() || !destination.commit()) return false;
+    m_config = updated;
+  }
+  emit competitionUiModeChanged();
+  return true;
 }
 
 ConfigManager::~ConfigManager() {}

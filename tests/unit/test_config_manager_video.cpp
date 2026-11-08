@@ -8,6 +8,29 @@ class TestConfigManagerVideo : public QObject {
   Q_OBJECT
 
 private slots:
+  void competitionModePersistenceAndFallback() {
+    QTemporaryDir dir; QVERIFY(dir.isValid());
+    const QString path = dir.filePath("config.json");
+    QVERIFY(QFile::copy(QFileInfo(QStringLiteral(__FILE__)).absolutePath() + "/../../config.example.json", path));
+    auto &config = ConfigManager::instance(); QVERIFY(config.loadConfig(path));
+    QCOMPARE(config.competitionUiMode(), QStringLiteral("rmul"));
+    const int identity = config.getClientRobotId();
+    QVERIFY(config.setCompetitionUiMode("rmuc"));
+    QCOMPARE(config.getClientRobotId(), identity);
+    QVERIFY(config.loadConfig(path));
+    QCOMPARE(config.competitionUiMode(), QStringLiteral("rmuc"));
+    QVERIFY(!config.setCompetitionUiMode("invalid"));
+    QCOMPARE(config.competitionUiMode(), QStringLiteral("rmuc"));
+    QFile file(path); QVERIFY(file.open(QIODevice::ReadOnly));
+    auto json = QJsonDocument::fromJson(file.readAll()).object(); file.close();
+    auto ui = json.value("ui").toObject(); ui["competition_mode"] = "garbage"; json["ui"] = ui;
+    QVERIFY(file.open(QIODevice::WriteOnly | QIODevice::Truncate)); file.write(QJsonDocument(json).toJson()); file.close();
+    QVERIFY(config.loadConfig(path)); QCOMPARE(config.competitionUiMode(), QStringLiteral("rmul"));
+    json.remove("ui"); QVERIFY(file.open(QIODevice::WriteOnly | QIODevice::Truncate)); file.write(QJsonDocument(json).toJson()); file.close();
+    QVERIFY(config.loadConfig(path)); QCOMPARE(config.competitionUiMode(), QStringLiteral("rmul"));
+    QVERIFY(file.remove()); QVERIFY(!config.setCompetitionUiMode("rmuc"));
+    QCOMPARE(config.competitionUiMode(), QStringLiteral("rmul"));
+  }
   void optionalArModelIsNotAssumed() {
     QCOMPARE(ConfigManager::instance().getARModelPath(), QString());
     QVERIFY(!ConfigManager::instance().getAROverlayEnabled());

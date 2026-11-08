@@ -139,6 +139,31 @@ private slots:
       QCOMPARE(mqtt->clientId(), QStringLiteral("1"));
       auto *settings = window.findChild<QQuickWidget *>(QStringLiteral("settingsPanel"));
       QVERIFY(settings && settings->rootObject());
+      auto *top = window.findChild<QQuickWidget *>(QStringLiteral("topInfoBar"));
+      QVERIFY(top && top->rootObject());
+      QSignalSpy modeSent(network, &RM::NetworkManager::dataSent);
+      QSignalSpy connectionChanges(mqtt, &MqttManager::connectionStateChanged);
+      const auto session = data->mqttReceptionMetadata().value("session");
+      auto *selector = settings->rootObject()->findChild<QObject *>(QStringLiteral("competitionModeSelector"));
+      QVERIFY(selector);
+      for (const char *mode : {"rmuc", "rmul"}) {
+        const int index = QString::fromLatin1(mode) == QLatin1String("rmuc") ? 1 : 0;
+        QVERIFY(selector->setProperty("currentIndex", index));
+        QVERIFY(QMetaObject::invokeMethod(selector, "activated", Q_ARG(int, index)));
+        QTRY_COMPARE(top->rootObject()->property("competitionUiMode").toString(), QString::fromLatin1(mode));
+        QCOMPARE(data->getCurrentRobotId(), 1);
+        QCOMPARE(mqtt->clientId(), QStringLiteral("1"));
+        QVERIFY(network->isMqttConnected());
+        QCOMPARE(data->mqttReceptionMetadata().value("session"), session);
+        QCOMPARE(modeSent.count(), 0);
+        QCOMPARE(connectionChanges.count(), 0);
+      }
+      QVERIFY(ConfigManager::instance().setCompetitionUiMode("rmuc"));
+      QTRY_COMPARE(selector->property("currentIndex").toInt(), 1);
+      QVERIFY(ConfigManager::instance().setCompetitionUiMode("rmul"));
+      QTRY_COMPARE(selector->property("currentIndex").toInt(), 0);
+      QCOMPARE(modeSent.count(), 0);
+      QCOMPARE(connectionChanges.count(), 0);
       for (int id : {3, 7, 101, 103, 107, 1, 101}) {
         QVariant selected;
         QVERIFY(QMetaObject::invokeMethod(settings->rootObject(), "selectRobotByShortcut",

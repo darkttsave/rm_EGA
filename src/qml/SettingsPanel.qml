@@ -51,6 +51,20 @@ Rectangle {
     property string mqttIdentity: "未连接"
     property bool performanceControlsReady: false
     property bool robotShortcutPending: false
+    // qmllint disable unqualified
+    readonly property var uiConfigContext: typeof uiConfig !== "undefined" ? uiConfig : null
+    // qmllint enable unqualified
+    readonly property string competitionUiMode: uiConfigContext ? uiConfigContext.competitionUiMode : "rmul"
+    property string competitionModeError: ""
+    onCompetitionUiModeChanged: competitionSelector.currentIndex = competitionUiMode === "rmuc" ? 1 : 0
+    function chooseCompetitionUiMode(mode) {
+        if (!uiConfigContext || !uiConfigContext.setCompetitionUiMode(mode)) {
+            competitionModeError = "模式保存失败，请检查配置文件"
+            return false
+        }
+        competitionModeError = ""
+        return true
+    }
 
     onSelectedRobotTypeChanged: {
         clearRobotShortcutSelection()
@@ -229,6 +243,20 @@ Rectangle {
                 color: "#888888"
                 font.pixelSize: root.height * 0.03
             }
+
+            Text { text: "赛项界面"; color: "white"; font.pixelSize: root.height * 0.03 }
+            ComboBox {
+                id: competitionSelector
+                objectName: "competitionModeSelector"
+                model: ["RMUL", "RMUC"]
+                currentIndex: root.competitionUiMode === "rmuc" ? 1 : 0
+                Layout.preferredWidth: 110
+                onActivated: {
+                    if (!root.chooseCompetitionUiMode(currentIndex === 1 ? "rmuc" : "rmul"))
+                        currentIndex = root.competitionUiMode === "rmuc" ? 1 : 0
+                }
+            }
+            Text { text: root.competitionModeError || (root.competitionUiMode === "rmuc" ? "RMUC 通用界面，功能未完全适配" : ""); color: "#ffbf70"; font.pixelSize: root.height * 0.025 }
 
             Item {
                 Layout.fillWidth: true

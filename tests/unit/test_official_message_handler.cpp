@@ -57,6 +57,44 @@ template <typename T> QByteArray bytes(const T &message) {
 class TestOfficialMessageHandler : public QObject {
   Q_OBJECT
 private slots:
+  void rmulTopShowsOfficialStateAndHistory() {
+    Q_INIT_RESOURCE(qml);
+    GameData data; data.setCurrentRobotId(1); data.setMqttSessionState(true, "1");
+    QQuickWidget top; top.setResizeMode(QQuickWidget::SizeRootObjectToView);
+    top.resize(1280, 170); top.rootContext()->setContextProperty("gameData", &data);
+    top.setSource(QUrl(QStringLiteral("qrc:/qml/TopInfoBar.qml")));
+    QCOMPARE(top.status(), QQuickWidget::Ready);
+    auto *root = top.rootObject();
+    QCOMPARE(root->property("rmulAllyControl").toString(), QStringLiteral("未上报"));
+    robomaster::GameStatus game; game.set_current_stage(4); game.set_current_round(2);
+    game.set_stage_countdown_sec(240); game.set_red_score(0); game.set_blue_score(2);
+    data.updateGameStatus(game); data.recordMqttObservation("GameStatus", 0, 100000, 1000);
+    robomaster::GlobalUnitStatus global; global.set_total_cp_ally(0); global.set_total_cp_enemy(45);
+    data.updateGlobalUnitStatus(global); data.recordMqttObservation("GlobalUnitStatus", 1, 100001, 1001);
+    QTRY_COMPARE(root->property("rmulTime").toString(), QStringLiteral("4:00"));
+    QCOMPARE(root->property("rmulStage").toString(), QStringLiteral("4"));
+    QCOMPARE(root->property("rmulRedScore").toString(), QStringLiteral("0"));
+    QCOMPARE(root->property("rmulBlueScore").toString(), QStringLiteral("2"));
+    QCOMPARE(root->property("rmulAllyControl").toString(), QStringLiteral("0"));
+    QCOMPARE(root->property("rmulEnemyControl").toString(), QStringLiteral("45"));
+    data.setMqttSessionState(false, "1");
+    QCOMPARE(root->property("rmulTime").toString(), QStringLiteral("4:00 (历史)"));
+    QCOMPARE(root->property("rmulAllyControl").toString(), QStringLiteral("0 (历史)"));
+    data.setMqttSessionState(true, "1");
+    QCOMPARE(root->property("rmulEnemyControl").toString(), QStringLiteral("45 (历史)"));
+    global.Clear(); global.set_total_cp_enemy(0);
+    data.updateGlobalUnitStatus(global); data.recordMqttObservation("GlobalUnitStatus", 1, 100002, 1002);
+    QCOMPARE(root->property("rmulAllyControl").toString(), QStringLiteral("未上报"));
+    QCOMPARE(root->property("rmulEnemyControl").toString(), QStringLiteral("0"));
+    data.setCurrentRobotId(101);
+    QCOMPARE(root->property("rmulEnemyControl").toString(), QStringLiteral("身份不匹配"));
+    top.show();
+    for (int width : {1280, 1600, 1920}) {
+      top.resize(width, 170); QTRY_COMPARE(root->property("width").toInt(), width);
+      auto *content = root->findChild<QQuickItem *>("rmulTopInfo");
+      QVERIFY(content); QVERIFY(content->width() <= width);
+    }
+  }
   void shootingHudUsesOfficialObservations() {
     Q_INIT_RESOURCE(qml);
     GameData data;

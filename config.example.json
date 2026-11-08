@@ -11,6 +11,7 @@
         "fullscreen": true,
         "_comment": "当前主程序固定全屏启动；此字段为兼容配置，min_width 和 min_height 仍会生效"
     },
+    "ui": { "competition_mode": "rmul" },
     "ui_text": {
         "window_title": "RM26 Custom Client",
         "start_game": "开始比赛",

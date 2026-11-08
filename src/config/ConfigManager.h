@@ -22,6 +22,7 @@
 
 class ConfigManager : public QObject {
   Q_OBJECT
+  Q_PROPERTY(QString competitionUiMode READ competitionUiMode NOTIFY competitionUiModeChanged)
 
 public:
   /**
@@ -51,6 +52,8 @@ public:
   quint16 getMqttPort() const;
   int getClientRobotId() const;
   bool setClientRobotId(int robotId, QString *error = nullptr);
+  QString competitionUiMode() const;
+  Q_INVOKABLE bool setCompetitionUiMode(const QString &mode);
 
   // 窗口配置访问器
   int getWindowMinWidth() const;      // 窗口最小宽度 (默认1280)
@@ -87,6 +90,7 @@ public:
   void setAROverlayEnabled(bool enabled);
 
 signals:
+  void competitionUiModeChanged();
   /**
    * @brief 配置重载信号
    * @details 当配置文件发生变化并重新加载后发射此信号。

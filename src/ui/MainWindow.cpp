@@ -2130,6 +2130,7 @@ void MainWindow::createTopArea() {
 
   // --- QML TopInfoBar (V2.0) ---
   m_qmlTopInfoBar = new QQuickWidget(m_topArea);
+  m_qmlTopInfoBar->setObjectName(QStringLiteral("topInfoBar"));
   m_qmlTopInfoBar->setResizeMode(QQuickWidget::SizeRootObjectToView);
   makeQQuickWidgetTransparent(m_qmlTopInfoBar);
 
@@ -2137,6 +2138,7 @@ void MainWindow::createTopArea() {
   if (m_gameData) {
     m_qmlTopInfoBar->rootContext()->setContextProperty("gameData", m_gameData);
   }
+  m_qmlTopInfoBar->rootContext()->setContextProperty("uiConfig", &ConfigManager::instance());
 
   // 加载 QML 源文件
   m_qmlTopInfoBar->setSource(QUrl("qrc:/qml/TopInfoBar.qml"));
@@ -5817,6 +5819,7 @@ void MainWindow::setupKeyPanels() {
     m_qmlSettingsPanel->rootContext()->setContextProperty("gameData",
                                                           m_gameData);
   }
+  m_qmlSettingsPanel->rootContext()->setContextProperty("uiConfig", &ConfigManager::instance());
   m_qmlSettingsPanel->setSource(QUrl("qrc:/qml/SettingsPanel.qml"));
   m_settingsPanelRoot = m_qmlSettingsPanel->rootObject();
 
