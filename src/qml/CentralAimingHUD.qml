@@ -18,8 +18,37 @@ Item {
     readonly property var gameDataContext: typeof gameData !== "undefined" ? gameData : null
     // qmllint enable unqualified
     property var myRobot: gameDataContext ? gameDataContext.myRobot : ({})
-    property int robotType: (myRobot && myRobot.type !== undefined) ? Number(myRobot.type) : 3
-    property bool isAerialRobot: robotType === 6 || robotType === 4
+    property int robotType: (myRobot && myRobot.type !== undefined) ? Number(myRobot.type) : 0
+    readonly property bool isHeavy: robotType === 10
+    readonly property bool isInfantry: robotType === 3 || robotType === 4 || robotType === 5
+    readonly property bool hasLegacyAmmo: isInfantry || robotType === 1 || robotType === 6 || robotType === 7
+    property bool isAerialRobot: robotType === 6
+
+    // Latest packet presence and its MQTT session are kept separate from the
+    // legacy projection, which may have been written by a different source.
+    readonly property var dynamicSnapshot: gameDataContext ? gameDataContext.robotDynamicStatus : ({})
+    readonly property var reception: gameDataContext ? gameDataContext.mqttReceptionMetadata : ({})
+    readonly property var dynamicReceipt: (reception.topics || ({})).RobotDynamicStatus || ({})
+    readonly property var staticReceipt: (reception.staticByRobot || ({}))[String(myRobot.robotId)] || ({})
+    function dynamicField(name) { return (dynamicSnapshot.fields || ({}))[name] || ({ state: "unreported" }); }
+    function fieldDisplay(name, decimals) {
+        var field = dynamicField(name);
+        if (field.state === "invalid") return "无效";
+        if (field.state !== "valid") return "未上报";
+        var value = Number(field.value);
+        var formatted = decimals >= 0 ? value.toFixed(decimals) : String(value);
+        if (dynamicReceipt.sessionState === "current") return formatted;
+        if (dynamicReceipt.sessionState === "historical" || dynamicReceipt.sessionState === "disconnected") return formatted + " (历史)";
+        return "来源未确认";
+    }
+    readonly property var officialHeat: dynamicField("current_heat")
+    readonly property var staticPerformance: myRobot.staticPerformance || ({})
+    readonly property bool heavyHeatKnown: isHeavy && dynamicReceipt.sessionState === "current"
+        && officialHeat.state === "valid" && staticReceipt.sessionState === "current"
+        && staticPerformance.max_heat !== undefined && Number(staticPerformance.max_heat) > 0
+        && Number(staticPerformance.max_heat) <= 65535
+    readonly property bool heavyHeatExceeded: heavyHeatKnown && Number(officialHeat.value) > Number(staticPerformance.max_heat)
+    readonly property string heatStatusText: !isHeavy ? "" : !heavyHeatKnown ? "热量未知" : heavyHeatExceeded ? "热量数值超上限" : ""
 
     // --- 自定义 UI 数据绑定 ---
     property var customData: gameDataContext ? gameDataContext.myRobotCustomData : ({})
@@ -27,10 +56,10 @@ Item {
 
     property real currentHeat: (myRobot && myRobot.currentHeat !== undefined) ? Number(myRobot.currentHeat) : 0
     property real heatLimit: (myRobot && myRobot.heatLimit !== undefined) ? Math.max(0, Number(myRobot.heatLimit)) : 0
-    property real heatRatioRaw: heatLimit > 0 ? currentHeat / heatLimit : 0
+    property real heatRatioRaw: isHeavy ? (heavyHeatKnown ? Number(officialHeat.value) / Number(staticPerformance.max_heat) : 0) : (heatLimit > 0 ? currentHeat / heatLimit : 0)
     property real heatRatio: Math.max(0, Math.min(1, heatRatioRaw))
 
-    property bool isOverheated: (myRobot && myRobot.isHeatOverLimit !== undefined) ? myRobot.isHeatOverLimit : (heatRatioRaw >= 1.0)
+    property bool isOverheated: isHeavy ? heavyHeatExceeded : (myRobot && myRobot.isHeatOverLimit !== undefined) ? myRobot.isHeatOverLimit : (heatRatioRaw >= 1.0)
     property color heatColor: {
         if (isOverheated)
             return "#FF3B3B";
@@ -62,8 +91,8 @@ Item {
     // 直接使用配置下发的锁定时长
     property int speedLockSeconds: configuredSpeedLockSeconds
 
-    property bool centerSpeedWarning: speedOverLimit && !isAerialRobot
-    property bool panelSpeedWarning: speedOverLimit && isAerialRobot
+    property bool centerSpeedWarning: !isHeavy && speedOverLimit && !isAerialRobot
+    property bool panelSpeedWarning: !isHeavy && speedOverLimit && isAerialRobot
 
     property bool isHero: robotType === 1
     property int allowedAmmo17mmRaw: {
@@ -77,6 +106,8 @@ Item {
         return 0;
     }
     property int allowedAmmoRaw: isHero ? allowedAmmo42mmRaw : allowedAmmo17mmRaw
+    readonly property string speedDisplay: fieldDisplay("last_projectile_fire_rate", 1)
+    readonly property string ammoDisplay: isHeavy ? fieldDisplay("remaining_ammo", -1) : hasLegacyAmmo ? String(allowedAmmoRaw) : "未上报"
     property int fortressBonusAmmo: {
         if (!myRobot) return 0;
         if (myRobot.fortressBonusAmmo !== undefined && Number(myRobot.fortressBonusAmmo) > 0)
@@ -193,7 +224,7 @@ Item {
                 anchors.horizontalCenter: parent.horizontalCenter
                 anchors.bottom: parent.top
                 anchors.bottomMargin: 10
-                text: "热量超限，图传断开"
+                text: root.isHeavy ? root.heatStatusText : "热量超限，图传断开"
                 visible: root.isOverheated
                 color: "#FF4747"
                 font.pixelSize: 18
@@ -217,6 +248,16 @@ Item {
                         duration: 280
                     }
                 }
+            }
+
+            Text {
+                anchors.horizontalCenter: parent.horizontalCenter
+                anchors.bottom: parent.top
+                anchors.bottomMargin: 10
+                text: root.heatStatusText
+                visible: root.isHeavy && !root.heavyHeatKnown
+                color: "#C4CDD3"
+                font.pixelSize: 14
             }
 
             Text {
@@ -293,9 +334,9 @@ Item {
                         font.family: "PingFang SC"
                     }
                     Text {
-                        text: root.panelSpeedWarning ? (root.muzzleVelocity.toFixed(1) + " " + root.speedLockSeconds + "s") : root.muzzleVelocity.toFixed(1)
+                        text: root.speedDisplay
                         color: root.panelSpeedWarning ? "#FF3B3B" : "#EEF3F6"
-                        font.pixelSize: root.panelSpeedWarning ? 28 : 28
+                        font.pixelSize: root.speedDisplay.length > 7 ? 16 : 28
                         font.family: "PingFang SC"
                         font.bold: true
                     }
@@ -310,14 +351,14 @@ Item {
                         font.family: "PingFang SC"
                     }
                     Text {
-                        text: root.allowedAmmoRaw
-                        color: root.ammoColor
-                        font.pixelSize: 28
+                        text: root.ammoDisplay
+                        color: root.isHeavy || !root.hasLegacyAmmo ? "#EEF3F6" : root.ammoColor
+                        font.pixelSize: root.ammoDisplay.length > 7 ? 16 : 28
                         font.family: "PingFang SC"
                         font.bold: true
                     }
                     Text {
-                        visible: root.fortressBonusAmmo > 0
+                        visible: !root.isHeavy && root.hasLegacyAmmo && root.fortressBonusAmmo > 0
                         text: "+" + root.fortressBonusAmmo
                         color: "#11F5A0"
                         font.pixelSize: 28
@@ -345,7 +386,7 @@ Item {
         border.color: "#FF4444"
         border.width: 1
         radius: 4
-        visible: root.showCustomStatusPanels && root.customData.fricEnabled !== undefined
+        visible: !root.isHeavy && root.showCustomStatusPanels && root.customData.fricEnabled !== undefined
 
         Column {
             anchors.centerIn: parent
@@ -416,7 +457,7 @@ Item {
         border.color: "#FF4444"
         border.width: 1
         radius: 4
-        visible: root.showCustomStatusPanels && root.customData.chassisMode !== undefined
+        visible: !root.isHeavy && root.showCustomStatusPanels && root.customData.chassisMode !== undefined
 
         Column {
             anchors.fill: parent
@@ -482,7 +523,7 @@ Item {
         border.color: "#00CED1"
         border.width: 1
         radius: 4
-        visible: root.customData.superCapEnergy !== undefined && root.customData.superCapEnergy > 0
+        visible: !root.isHeavy && root.customData.superCapEnergy !== undefined && root.customData.superCapEnergy > 0
 
         Column {
             anchors.fill: parent
@@ -543,7 +584,7 @@ Item {
         anchors.bottomMargin: 30
         width: 120
         height: 80
-        visible: root.customData.gimbalChassisAngle !== undefined && Math.abs(root.customData.gimbalChassisAngle) > 0.1
+        visible: !root.isHeavy && root.customData.gimbalChassisAngle !== undefined && Math.abs(root.customData.gimbalChassisAngle) > 0.1
 
         // 角度数值
         Text {
@@ -599,7 +640,7 @@ Item {
         border.color: "#FF4444"
         border.width: 2
         opacity: 0.7
-        visible: root.customData.targetDistance > 0
+        visible: !root.isHeavy && root.customData.targetDistance > 0
 
         // 内部十字
         Rectangle {

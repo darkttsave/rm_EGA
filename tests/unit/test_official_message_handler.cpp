@@ -57,6 +57,80 @@ template <typename T> QByteArray bytes(const T &message) {
 class TestOfficialMessageHandler : public QObject {
   Q_OBJECT
 private slots:
+  void shootingHudUsesOfficialObservations() {
+    Q_INIT_RESOURCE(qml);
+    GameData data;
+    data.setCurrentRobotId(1);
+    data.setMqttSessionState(true, "1");
+    QQuickWidget hud;
+    hud.rootContext()->setContextProperty("gameData", &data);
+    hud.setSource(QUrl(QStringLiteral("qrc:/qml/CentralAimingHUD.qml")));
+    QCOMPARE(hud.status(), QQuickWidget::Ready);
+    auto *root = hud.rootObject();
+    QVERIFY(root->property("isHeavy").toBool());
+    QCOMPARE(root->property("ammoDisplay").toString(), QStringLiteral("未上报"));
+    QCOMPARE(root->property("speedDisplay").toString(), QStringLiteral("未上报"));
+    QVERIFY(!root->property("heavyHeatKnown").toBool());
+
+    robomaster::RobotStaticStatus stat;
+    stat.set_robot_id(1); stat.set_max_heat(100); stat.set_max_health(200);
+    data.updateRobotStaticStatus(stat);
+    data.recordMqttObservation("RobotStaticStatus", 1, 100000, 1000);
+    robomaster::RobotDynamicStatus msg;
+    msg.set_current_heat(110.5f); msg.set_current_health(100);
+    msg.set_last_projectile_fire_rate(12.5f); msg.set_remaining_ammo(9);
+    data.updateRobotDynamicStatus(msg);
+    data.recordMqttObservation("RobotDynamicStatus", 1, 100001, 1001);
+    QTRY_COMPARE(root->property("speedDisplay").toString(), QStringLiteral("12.5"));
+    QCOMPARE(root->property("ammoDisplay").toString(), QStringLiteral("9"));
+    QVERIFY(root->property("heavyHeatExceeded").toBool());
+    QCOMPARE(root->property("heatRatio").toDouble(), 1.0);
+    QCOMPARE(data.currentHealth(), 100);
+    QCOMPARE(data.getRobotById(1)->muzzleVelocity, 0.0f);
+    QVERIFY(!data.getRobotById(1)->isHeatOverLimit);
+    QVERIFY(!data.getRobotById(1)->shooterLocked);
+    QQuickWidget health;
+    health.rootContext()->setContextProperty("gameData", &data);
+    health.setSource(QUrl(QStringLiteral("qrc:/qml/LeftBottomPanel.qml")));
+    QCOMPARE(health.status(), QQuickWidget::Ready);
+    QCOMPARE(health.rootObject()->property("healthRatio").toDouble(), 0.5);
+    data.setRobotHeat(1, 20);
+    data.updateRobotDynamicStatus(msg);
+    data.recordMqttObservation("RobotDynamicStatus", 1, 100001, 1001);
+    QCOMPARE(data.getRobotById(1)->currentHeat, 20.0f);
+    QVERIFY(root->property("heavyHeatExceeded").toBool());
+    QVERIFY(!data.getRobotById(1)->shooterLocked);
+
+    msg.set_last_projectile_fire_rate(0); msg.set_remaining_ammo(0);
+    msg.set_current_heat(100);
+    data.updateRobotDynamicStatus(msg);
+    data.recordMqttObservation("RobotDynamicStatus", 1, 100002, 1002);
+    QCOMPARE(root->property("speedDisplay").toString(), QStringLiteral("0.0"));
+    QCOMPARE(root->property("ammoDisplay").toString(), QStringLiteral("0"));
+    QVERIFY(!root->property("heavyHeatExceeded").toBool());
+    msg.set_last_projectile_fire_rate(std::numeric_limits<float>::quiet_NaN());
+    msg.clear_remaining_ammo();
+    data.updateRobotDynamicStatus(msg);
+    data.recordMqttObservation("RobotDynamicStatus", 1, 100003, 1003);
+    QCOMPARE(root->property("speedDisplay").toString(), QStringLiteral("无效"));
+    QCOMPARE(root->property("ammoDisplay").toString(), QStringLiteral("未上报"));
+    msg.set_last_projectile_fire_rate(15.5f); msg.set_remaining_ammo(7);
+    data.updateRobotDynamicStatus(msg);
+    data.recordMqttObservation("RobotDynamicStatus", 1, 100004, 1004);
+    data.setMqttSessionState(false, "1");
+    QCOMPARE(root->property("speedDisplay").toString(), QStringLiteral("15.5 (历史)"));
+    QVERIFY(!root->property("heavyHeatKnown").toBool());
+    data.setMqttSessionState(true, "1");
+    QCOMPARE(root->property("ammoDisplay").toString(), QStringLiteral("7 (历史)"));
+
+    data.setCurrentRobotId(3);
+    QVERIFY(root->property("isInfantry").toBool());
+    QVERIFY(!root->property("isHeavy").toBool());
+    QCOMPARE(root->property("speedDisplay").toString(), QStringLiteral("未上报"));
+    data.setCurrentRobotId(2);
+    QVERIFY(!root->property("hasLegacyAmmo").toBool());
+    QCOMPARE(root->property("ammoDisplay").toString(), QStringLiteral("未上报"));
+  }
   void identityAndGlobalHealthThroughOfficialTopics() {
     GameData data;
     data.setMyRobotId(101);
