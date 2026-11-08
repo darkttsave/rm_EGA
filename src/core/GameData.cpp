@@ -21,6 +21,7 @@
 #include <algorithm>
 #include <cmath>
 #include <chrono>
+#include <limits>
 #include "PopupStateMachine.h"
 
 static QString getRobotName(int robotId);
@@ -553,6 +554,7 @@ void GameData::setCurrentRobotId(qint64 robotId) {
   m_currentRobotId = next;
   ++m_mqttIdentityEpoch;
   emit globalHealthObservationChanged();
+  emit logisticsObservationChanged();
   emit respawnObservationChanged();
   emit penaltyObservationChanged();
   emit injuryObservationChanged();
@@ -1962,6 +1964,12 @@ void GameData::updateRobotStaticStatus(const robomaster::RobotStaticStatus &data
 }
 }
 
+QVariantMap GameData::logisticsObservation() const {
+  QVariantMap result = m_logisticsObservation;
+  result["identityMatches"] = result.value("received").toBool() && result.value("identity").toInt() == m_currentRobotId && result.value("identityEpoch").toULongLong() == m_mqttIdentityEpoch;
+  return result;
+}
+
 QVariantMap GameData::respawnObservation() const {
   QVariantMap result = m_respawnObservation;
   result["identityMatches"] = result.value("received").toBool() && result.value("identity").toInt() == m_currentRobotId && result.value("identityEpoch").toULongLong() == m_mqttIdentityEpoch;
@@ -2042,10 +2050,10 @@ QVariantMap GameData::mqttReceptionMetadata() const {
     return record;
   };
   QVariantMap topics;
-  for (const char *name : {"GameStatus", "RobotDynamicStatus", "RobotModuleStatus", "GlobalUnitStatus", "PenaltyInfo", "RobotInjuryStat", "RobotRespawnStatus", "Event16"}) {
+  for (const char *name : {"GameStatus", "RobotDynamicStatus", "RobotModuleStatus", "GlobalUnitStatus", "GlobalLogisticsStatus", "PenaltyInfo", "RobotInjuryStat", "RobotRespawnStatus", "Event16"}) {
     const QString key = QString::fromLatin1(name);
     topics[key] = annotate(m_mqttTopicMetadata.value(key).toMap(),
-        key == QLatin1String("RobotDynamicStatus") || key == QLatin1String("RobotModuleStatus") || key == QLatin1String("GlobalUnitStatus") || key == QLatin1String("PenaltyInfo") || key == QLatin1String("RobotInjuryStat") || key == QLatin1String("RobotRespawnStatus"));
+        key == QLatin1String("RobotDynamicStatus") || key == QLatin1String("RobotModuleStatus") || key == QLatin1String("GlobalUnitStatus") || key == QLatin1String("PenaltyInfo") || key == QLatin1String("RobotInjuryStat") || key == QLatin1String("RobotRespawnStatus") || key == QLatin1String("GlobalLogisticsStatus"));
   }
   QVariantMap staticRobots;
   for (auto it = m_mqttStaticMetadata.cbegin(); it != m_mqttStaticMetadata.cend(); ++it)
@@ -2058,7 +2066,7 @@ QVariantMap GameData::mqttReceptionMetadata() const {
 void GameData::recordMqttObservation(const QString &topic, int identity, qint64 receivedMs, qint64 monotonicMs) {
   if (!m_mqttSessionConnected || receivedMs <= 0) return;
   const bool isStatic = topic == QLatin1String("RobotStaticStatus");
-  const bool isIdentityScoped = topic == QLatin1String("RobotDynamicStatus") || topic == QLatin1String("RobotModuleStatus") || topic == QLatin1String("GlobalUnitStatus") || topic == QLatin1String("PenaltyInfo") || topic == QLatin1String("RobotInjuryStat") || topic == QLatin1String("RobotRespawnStatus");
+  const bool isIdentityScoped = topic == QLatin1String("RobotDynamicStatus") || topic == QLatin1String("RobotModuleStatus") || topic == QLatin1String("GlobalUnitStatus") || topic == QLatin1String("PenaltyInfo") || topic == QLatin1String("RobotInjuryStat") || topic == QLatin1String("RobotRespawnStatus") || topic == QLatin1String("GlobalLogisticsStatus");
   if (isIdentityScoped) {
     const auto resolved = RM::resolveRobotIdentity(identity);
     if (resolved.kind != RM::IdentityKind::Robot || !resolved.team) return;
@@ -2092,6 +2100,15 @@ void GameData::recordMqttObservation(const QString &topic, int identity, qint64 
   }
   if (topic == QLatin1String("PenaltyInfo")) { m_penaltyObservation["source"] = QStringLiteral("official_mqtt"); emit penaltyObservationChanged(); }
   if (topic == QLatin1String("RobotInjuryStat")) { m_injuryObservation["source"] = QStringLiteral("official_mqtt"); emit injuryObservationChanged(); }
+  if (topic == QLatin1String("GlobalLogisticsStatus")) {
+    m_logisticsObservation["source"] = QStringLiteral("official_mqtt");
+    auto sources = m_logisticsObservation.value("acceptedSource").toMap();
+    const auto observed = m_logisticsObservation.value("fields").toMap();
+    for (auto it = observed.cbegin(); it != observed.cend(); ++it)
+      if (it.value().toMap().value("state") == QLatin1String("valid")) sources[it.key()] = QStringLiteral("official_mqtt");
+    m_logisticsObservation["acceptedSource"] = sources;
+    emit logisticsObservationChanged();
+  }
   if (topic == QLatin1String("RobotRespawnStatus")) {
     m_respawnObservation["source"] = QStringLiteral("official_mqtt");
     auto acceptedSource = m_respawnObservation.value("acceptedSource").toMap();
@@ -2102,7 +2119,8 @@ void GameData::recordMqttObservation(const QString &topic, int identity, qint64 
     emit respawnObservationChanged();
   }
   QVariantMap fields;
-  if (topic == QLatin1String("RobotRespawnStatus")) fields = m_respawnObservation.value("fields").toMap();
+  if (topic == QLatin1String("GlobalLogisticsStatus")) fields = m_logisticsObservation.value("fields").toMap();
+  else if (topic == QLatin1String("RobotRespawnStatus")) fields = m_respawnObservation.value("fields").toMap();
   else if (topic == QLatin1String("PenaltyInfo")) fields = m_penaltyObservation.value("fields").toMap();
   else if (topic == QLatin1String("RobotInjuryStat")) fields = m_injuryObservation.value("fields").toMap();
   else if (topic == QLatin1String("GlobalUnitStatus")) fields = m_globalHealthFields;
@@ -3140,40 +3158,51 @@ void GameData::updateGameStatus(const robomaster::GameStatus &data) {
 
 void GameData::updateGlobalLogisticsStatus(
     const robomaster::GlobalLogisticsStatus &data) {
-  const bool isBluePerspective = getMyRobotId() >= 100;
-  TeamLogisticsStatusData &logistics =
-      isBluePerspective ? m_blueLogisticsStatus : m_redLogisticsStatus;
+  const auto identity = RM::resolveRobotIdentity(m_currentRobotId);
+  if (identity.kind != RM::IdentityKind::Robot || !identity.team) return;
+  const bool blue = *identity.team == TeamColor::BLUE;
+  const bool sameIdentity = m_logisticsObservation.value("received").toBool() &&
+      m_logisticsObservation.value("identityEpoch").toULongLong() == m_mqttIdentityEpoch;
+  QVariantMap accepted = sameIdentity ? m_logisticsObservation.value("accepted").toMap() : QVariantMap{};
+  QVariantMap acceptedStrings = sameIdentity ? m_logisticsObservation.value("acceptedStrings").toMap() : QVariantMap{};
+  QVariantMap acceptedSource = sameIdentity ? m_logisticsObservation.value("acceptedSource").toMap() : QVariantMap{};
+  QVariantMap fields;
+  auto observe = [&](const char *name, bool present, quint64 value, bool is64) {
+    const QString key = QString::fromLatin1(name);
+    QVariantMap field{{"state", present ? "valid" : "unreported"}};
+    if (present) {
+      field["value"] = QVariant::fromValue(value);
+      field["valueString"] = QString::number(value);
+      if (key == QLatin1String("remaining_economy") && value > static_cast<quint64>(std::numeric_limits<int>::max()))
+        field["legacyProjection"] = QStringLiteral("out_of_range");
+      accepted[key] = is64 ? QVariant::fromValue(value) : QVariant::fromValue(static_cast<quint32>(value));
+      acceptedStrings[key] = QString::number(value);
+      acceptedSource[key] = QStringLiteral("protocol_unverified");
+    }
+    fields[key] = field;
+  };
+  observe("remaining_economy", data.has_remaining_economy(), data.remaining_economy(), false);
+  observe("total_economy_obtained", data.has_total_economy_obtained(), data.total_economy_obtained(), true);
+  observe("tech_level", data.has_tech_level(), data.tech_level(), false);
+  observe("encryption_level", data.has_encryption_level(), data.encryption_level(), false);
+  m_logisticsObservation = {{"received", true}, {"identity", m_currentRobotId}, {"identityEpoch", QVariant::fromValue(m_mqttIdentityEpoch)},
+      {"team", blue ? "blue" : "red"}, {"source", "protocol_unverified"}, {"fields", fields}, {"accepted", accepted},
+      {"acceptedStrings", acceptedStrings}, {"acceptedSource", acceptedSource}};
+  emit logisticsObservationChanged();
 
-  const quint32 previousRemainingEconomy = logistics.remainingEconomy;
-  const quint64 previousTotalEconomyObtained = logistics.totalEconomyObtained;
-  const quint32 previousTechLevel = logistics.techLevel;
-  const quint32 previousEncryptionLevel = logistics.encryptionLevel;
-
-  logistics.remainingEconomy = data.remaining_economy();
-  logistics.totalEconomyObtained = data.total_economy_obtained();
-  logistics.techLevel = data.tech_level();
-  logistics.encryptionLevel = data.encryption_level();
-
-  const int remainingEconomy = static_cast<int>(logistics.remainingEconomy);
-  const bool economyChanged = isBluePerspective
-                                  ? (m_blueEconomy != remainingEconomy)
-                                  : (m_redEconomy != remainingEconomy);
-  if (isBluePerspective) {
-    m_blueEconomy = remainingEconomy;
-  } else {
-    m_redEconomy = remainingEconomy;
+  TeamLogisticsStatusData &logistics = blue ? m_blueLogisticsStatus : m_redLogisticsStatus;
+  const auto previous = logistics;
+  if (data.has_remaining_economy()) logistics.remainingEconomy = data.remaining_economy();
+  if (data.has_total_economy_obtained()) logistics.totalEconomyObtained = data.total_economy_obtained();
+  if (data.has_tech_level()) logistics.techLevel = data.tech_level();
+  if (data.has_encryption_level()) logistics.encryptionLevel = data.encryption_level();
+  if (data.has_remaining_economy() && data.remaining_economy() <= static_cast<quint32>(std::numeric_limits<int>::max())) {
+    int &legacy = blue ? m_blueEconomy : m_redEconomy;
+    const int value = static_cast<int>(data.remaining_economy());
+    if (legacy != value) { legacy = value; emit economyUpdated(); emit currentTeamEconomyChanged(); }
   }
-  if (economyChanged) {
-    emit economyUpdated();
-    emit currentTeamEconomyChanged();
-  }
-
-  if (previousRemainingEconomy != logistics.remainingEconomy ||
-      previousTotalEconomyObtained != logistics.totalEconomyObtained ||
-      previousTechLevel != logistics.techLevel ||
-      previousEncryptionLevel != logistics.encryptionLevel) {
-    emitDataChanged();
-  }
+  if (previous.remainingEconomy != logistics.remainingEconomy || previous.totalEconomyObtained != logistics.totalEconomyObtained ||
+      previous.techLevel != logistics.techLevel || previous.encryptionLevel != logistics.encryptionLevel) emitDataChanged();
 }
 
 void GameData::updateGlobalSpecialMechanism(

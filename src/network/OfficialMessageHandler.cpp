@@ -18,6 +18,17 @@ QJsonArray repeatedFieldToJsonArray(const RepeatedFieldT &field) {
 OfficialMessageHandler::Result OfficialMessageHandler::handle(
     const QString &topic, const QByteArray &payload, GameData &gameData,
     const ParsedLogger &logger, const GameStatusCacheUpdater &cacheUpdater) {
+  if (topic == QLatin1String("GlobalLogisticsStatus")) {
+    robomaster::GlobalLogisticsStatus msg;
+    if (!msg.ParseFromArray(payload.data(), payload.size())) return Result::ParseFailed;
+    if (logger) logger(QStringLiteral("GlobalLogisticsStatus remaining=%1 total=%2 tech=%3 encryption=%4")
+        .arg(msg.remaining_economy()).arg(msg.total_economy_obtained()).arg(msg.tech_level()).arg(msg.encryption_level()),
+        {{QStringLiteral("has_remaining_economy"), msg.has_remaining_economy()},
+         {QStringLiteral("remaining_economy"), static_cast<qint64>(msg.remaining_economy())},
+         {QStringLiteral("total_economy_obtained"), QString::number(msg.total_economy_obtained())}});
+    gameData.updateGlobalLogisticsStatus(msg);
+    return Result::Parsed;
+  }
   if (topic == QLatin1String("RobotRespawnStatus")) {
     robomaster::RobotRespawnStatus msg;
     if (!msg.ParseFromArray(payload.data(), payload.size())) return Result::ParseFailed;

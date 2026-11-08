@@ -32,6 +32,7 @@ void captureDynamicCallback(QtMsgType, const QMessageLogContext &, const QString
   if (message.contains("RM26_MQTT_RX_TIMING direction=rx topic=PenaltyInfo")) observedQueuedTopics.fetch_or(64);
   if (message.contains("RM26_MQTT_RX_TIMING direction=rx topic=RobotInjuryStat")) observedQueuedTopics.fetch_or(128);
   if (message.contains("RM26_MQTT_RX_TIMING direction=rx topic=RobotRespawnStatus")) observedQueuedTopics.fetch_or(256);
+  if (message.contains("RM26_MQTT_RX_TIMING direction=rx topic=GlobalLogisticsStatus")) observedQueuedTopics.fetch_or(512);
 }
 QStringList detailedLogs;
 void captureDetails(QtMsgType type, const QMessageLogContext &, const QString &message) {
@@ -305,6 +306,11 @@ private slots:
     QTRY_COMPARE_WITH_TIMEOUT(topicMeta("RobotRespawnStatus").value("sessionState").toString(), QString("current"), 5000);
     QCOMPARE(data.respawnObservation().value("identity").toInt(), 1);
     QVERIFY(data.robotRespawnStatus().isEmpty());
+    robomaster::GlobalLogisticsStatus logistics; logistics.set_remaining_economy(123); logistics.set_total_economy_obtained(9007199254740993ULL);
+    QVERIFY(publisher.publish("GlobalLogisticsStatus", bytes(logistics), 1));
+    QTRY_COMPARE_WITH_TIMEOUT(topicMeta("GlobalLogisticsStatus").value("sessionState").toString(), QString("current"), 5000);
+    QCOMPARE(data.logisticsObservation().value("team").toString(), QString("red"));
+    QCOMPARE(data.redEconomy(), 123);
     data.setCurrentRobotId(101);
     QCOMPARE(topicMeta("RobotDynamicStatus").value("sessionState").toString(), QString("identity_changed"));
     QVERIFY(publisher.publish(QStringLiteral("RobotDynamicStatus"), bytes(msg), 1));
@@ -320,8 +326,9 @@ private slots:
     penalty.set_penalty_type(3); injury.set_total_damage(999);
     publisher.publish("PenaltyInfo", bytes(penalty), 1); publisher.publish("RobotInjuryStat", bytes(injury), 1);
     respawn.set_current_respawn_progress(999); publisher.publish("RobotRespawnStatus", bytes(respawn), 1);
-    for (int i = 0; i < 100 && (observedQueuedTopics.load() & 481) != 481; ++i) QThread::msleep(10);
-    const bool identitySeen = (observedQueuedTopics.load() & 481) == 481;
+    logistics.set_remaining_economy(999); publisher.publish("GlobalLogisticsStatus", bytes(logistics), 1);
+    for (int i = 0; i < 100 && (observedQueuedTopics.load() & 993) != 993; ++i) QThread::msleep(10);
+    const bool identitySeen = (observedQueuedTopics.load() & 993) == 993;
     data.setCurrentRobotId(101); data.setCurrentRobotId(1);
     QCoreApplication::processEvents();
     qInstallMessageHandler(identityHandler);
@@ -333,6 +340,9 @@ private slots:
     QCOMPARE(topicMeta("PenaltyInfo").value("sessionState").toString(), QString("identity_changed"));
     QCOMPARE(data.respawnObservation().value("fields").toMap().value("current_respawn_progress").toMap().value("value").toUInt(), 12u);
     QCOMPARE(topicMeta("RobotRespawnStatus").value("sessionState").toString(), QString("identity_changed"));
+    QCOMPARE(data.redEconomy(), 123);
+    QCOMPARE(data.logisticsObservation().value("accepted").toMap().value("remaining_economy").toUInt(), 123u);
+    QCOMPARE(topicMeta("GlobalLogisticsStatus").value("sessionState").toString(), QString("identity_changed"));
     QCOMPARE(topicMeta("GlobalUnitStatus").value("sessionState").toString(), QString("identity_changed"));
     QCOMPARE(topicMeta("RobotDynamicStatus").value("sessionState").toString(), QString("identity_changed"));
     // Ensure a callback has queued the old message while the Qt thread remains blocked.
@@ -348,8 +358,9 @@ private slots:
     publisher.publish("GlobalUnitStatus", bytes(global), 1);
     publisher.publish("PenaltyInfo", bytes(penalty), 1); publisher.publish("RobotInjuryStat", bytes(injury), 1);
     publisher.publish("RobotRespawnStatus", bytes(respawn), 1);
-    for (int i = 0; i < 200 && observedQueuedTopics.load() != 511; ++i) QThread::msleep(10);
-    const bool callbackSeen = dynamicCallbackObserved.load() && observedQueuedTopics.load() == 511;
+    publisher.publish("GlobalLogisticsStatus", bytes(logistics), 1);
+    for (int i = 0; i < 200 && observedQueuedTopics.load() != 1023; ++i) QThread::msleep(10);
+    const bool callbackSeen = dynamicCallbackObserved.load() && observedQueuedTopics.load() == 1023;
     network.stopMqtt();
     data.setCurrentRobotId(101);
     QCoreApplication::processEvents();
@@ -368,6 +379,12 @@ private slots:
     QCOMPARE(topicMeta("PenaltyInfo").value("sessionState").toString(), QString("historical"));
     QCOMPARE(topicMeta("RobotInjuryStat").value("sessionState").toString(), QString("historical"));
     QCOMPARE(topicMeta("RobotRespawnStatus").value("sessionState").toString(), QString("historical"));
+    QCOMPARE(topicMeta("GlobalLogisticsStatus").value("sessionState").toString(), QString("historical"));
+    logistics.set_remaining_economy(456); QVERIFY(publisher.publish("GlobalLogisticsStatus", bytes(logistics), 1));
+    QTRY_COMPARE_WITH_TIMEOUT(topicMeta("GlobalLogisticsStatus").value("sessionState").toString(), QString("current"), 5000);
+    QCOMPARE(data.logisticsObservation().value("identity").toInt(), 101);
+    QCOMPARE(data.logisticsObservation().value("team").toString(), QString("blue"));
+    QCOMPARE(data.blueEconomy(), 456); QCOMPARE(data.redEconomy(), 123);
     QVERIFY(publisher.publish("RobotRespawnStatus", bytes(respawn), 1));
     QTRY_COMPARE_WITH_TIMEOUT(topicMeta("RobotRespawnStatus").value("sessionState").toString(), QString("current"), 5000);
     QCOMPARE(data.respawnObservation().value("identity").toInt(), 101);
@@ -411,6 +428,73 @@ private slots:
     network.stopMqtt(); publisher.disconnect();
   }
 #endif
+  void officialLogisticsObservation() {
+    Q_INIT_RESOURCE(qml);
+    GameData data; data.setCurrentRobotId(1);
+    QQuickWidget panel; panel.rootContext()->setContextProperty("gameData", &data);
+    panel.setSource(QUrl(QStringLiteral("qrc:/qml/RM27DevPanel.qml")));
+    QCOMPARE(panel.status(), QQuickWidget::Ready);
+    std::function<QQuickItem *(QQuickItem *, const QString &)> findVisual = [&](QQuickItem *item, const QString &name) -> QQuickItem * {
+      if (item->objectName() == name) return item;
+      for (auto *child : item->childItems()) if (auto *found = findVisual(child, name)) return found;
+      return nullptr;
+    };
+    auto *total = findVisual(panel.rootObject(), "rm27Logistics_total_economy_obtained");
+    auto *remaining = findVisual(panel.rootObject(), "rm27Logistics_remaining_economy");
+    auto *session = findVisual(panel.rootObject(), "rm27LogisticsSession");
+    QVERIFY(total); QVERIFY(remaining); QVERIFY(session);
+    robomaster::GameStatus game; game.set_current_stage(4); game.set_stage_countdown_sec(240); game.set_is_paused(true);
+    data.updateGameStatus(game);
+    robomaster::GlobalLogisticsStatus msg; msg.set_remaining_economy(0); msg.set_total_economy_obtained(9007199254740993ULL); msg.set_tech_level(0); msg.set_encryption_level(4294967295u);
+    QCOMPARE(OfficialMessageHandler::handle("GlobalLogisticsStatus", bytes(msg), data), OfficialMessageHandler::Result::Parsed);
+    auto snap = data.logisticsObservation(); auto fields = snap.value("fields").toMap();
+    for (const char *key : {"remaining_economy", "total_economy_obtained", "tech_level", "encryption_level"})
+      QCOMPARE(fields.value(QLatin1String(key)).toMap().value("state").toString(), QString("valid"));
+    QCOMPARE(fields.value("total_economy_obtained").toMap().value("value").toULongLong(), 9007199254740993ULL);
+    QCOMPARE(data.redTotalEconomyObtained(), 9007199254740993ULL);
+    QCOMPARE(fields.value("encryption_level").toMap().value("value").toULongLong(), 4294967295ULL);
+    QTRY_VERIFY(total->property("primary").toString().contains(QStringLiteral("9007199254740993")));
+    QTRY_VERIFY(remaining->property("primary").toString().contains(QStringLiteral("当前经济: 0")));
+    QTRY_VERIFY(session->property("primary").toString().contains(QStringLiteral("红方")));
+    QCOMPARE(data.getGameTime(), 240); QCOMPARE(static_cast<int>(data.getCurrentStage()), 4); QVERIFY(data.is_paused());
+    msg.Clear(); msg.set_tech_level(2); data.updateGlobalLogisticsStatus(msg);
+    snap = data.logisticsObservation();
+    QCOMPARE(snap.value("fields").toMap().value("total_economy_obtained").toMap().value("state").toString(), QString("unreported"));
+    QCOMPARE(snap.value("accepted").toMap().value("total_economy_obtained").toULongLong(), 9007199254740993ULL);
+    QTRY_VERIFY(total->property("primary").toString().contains(QStringLiteral("上次: 9007199254740993")));
+    QCOMPARE(data.redTotalEconomyObtained(), 9007199254740993ULL);
+    msg.Clear(); msg.set_remaining_economy(4294967295u); msg.set_total_economy_obtained(18446744073709551615ULL); data.updateGlobalLogisticsStatus(msg);
+    snap = data.logisticsObservation();
+    QCOMPARE(snap.value("accepted").toMap().value("remaining_economy").toUInt(), 4294967295u);
+    QCOMPARE(snap.value("accepted").toMap().value("total_economy_obtained").toULongLong(), 18446744073709551615ULL);
+    QCOMPARE(data.redEconomy(), 0); QCOMPARE(data.redRemainingEconomy(), 4294967295u);
+    QTRY_VERIFY(total->property("primary").toString().contains(QStringLiteral("18446744073709551615")));
+    QTRY_VERIFY(remaining->property("primary").toString().contains(QStringLiteral("超出旧类型范围")));
+    // A compatibility GameInfo update must not rewrite the official observation.
+    robomaster::GameInfo oldGame; oldGame.set_red_economy(432); data.updateGameState(oldGame);
+    QCOMPARE(data.redEconomy(), 432);
+    QCOMPARE(data.logisticsObservation().value("accepted").toMap().value("remaining_economy").toUInt(), 4294967295u);
+    QCOMPARE(data.logisticsObservation().value("accepted").toMap().value("total_economy_obtained").toULongLong(), 18446744073709551615ULL);
+    data.setCurrentRobotId(101); QVERIFY(!data.logisticsObservation().value("identityMatches").toBool());
+    msg.Clear(); msg.set_remaining_economy(321); data.updateGlobalLogisticsStatus(msg);
+    QCOMPARE(data.blueEconomy(), 321); QCOMPARE(data.redEconomy(), 432);
+    QVERIFY(!data.logisticsObservation().value("accepted").toMap().contains("total_economy_obtained"));
+    QTRY_VERIFY(session->property("primary").toString().contains(QStringLiteral("蓝方")));
+    QCOMPARE(OfficialMessageHandler::handle("GlobalLogisticsStatus", QByteArray::fromHex("0880"), data), OfficialMessageHandler::Result::ParseFailed);
+    data.setMqttSessionState(true, "101");
+    data.recordMqttObservation("GlobalLogisticsStatus", 101, 100000, 1000);
+    auto meta = data.mqttReceptionMetadata().value("topics").toMap().value("GlobalLogisticsStatus").toMap();
+    auto stamp = meta.value("fieldUpdates").toMap().value("remaining_economy").toMap();
+    QVERIFY(stamp.value("receivedAt").toDateTime().isValid());
+    msg.Clear(); msg.set_tech_level(3); data.updateGlobalLogisticsStatus(msg);
+    data.recordMqttObservation("GlobalLogisticsStatus", 101, 200000, 2000);
+    meta = data.mqttReceptionMetadata().value("topics").toMap().value("GlobalLogisticsStatus").toMap();
+    QCOMPARE(meta.value("fieldUpdates").toMap().value("remaining_economy").toMap(), stamp);
+    data.setMqttSessionState(false, "101");
+    QCOMPARE(data.mqttReceptionMetadata().value("topics").toMap().value("GlobalLogisticsStatus").toMap().value("sessionState").toString(), QString("disconnected"));
+    data.setMqttSessionState(true, "101");
+    QCOMPARE(data.mqttReceptionMetadata().value("topics").toMap().value("GlobalLogisticsStatus").toMap().value("sessionState").toString(), QString("historical"));
+  }
   void officialRespawnObservation() {
     Q_INIT_RESOURCE(qml);
     GameData data; data.setCurrentRobotId(1);

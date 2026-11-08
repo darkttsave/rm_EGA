@@ -80,7 +80,7 @@ Rectangle {
                       "\n时间为本机接收时间；当前会话不代表实时有效。"
             }
             Repeater {
-                model: ["GameStatus", "GlobalUnitStatus", "RobotDynamicStatus", "RobotStaticStatus", "RobotModuleStatus", "PenaltyInfo", "RobotInjuryStat", "RobotRespawnStatus", "Event16"]
+                model: ["GameStatus", "GlobalUnitStatus", "GlobalLogisticsStatus", "RobotDynamicStatus", "RobotStaticStatus", "RobotModuleStatus", "PenaltyInfo", "RobotInjuryStat", "RobotRespawnStatus", "Event16"]
                 delegate: Text {
                     required property string modelData
                     property var meta: { root.revision; return root.dataSource ? root.dataSource.mqttReceptionMetadata : ({}) }
@@ -286,6 +286,39 @@ Rectangle {
                         }
                     }
                     SourceRow { primary: "复活操作已冻结"; detail: "资格字段仅为观测，不代表已执行命令" }
+                }
+            }
+            SourceCard {
+                title: "己方后勤 · 官方观测"
+                Column {
+                    id: logisticsSection
+                    width: parent.width; spacing: 6
+                    property var snapshot: root.dataSource ? root.dataSource.logisticsObservation : ({})
+                    property var receipt: root.dataSource ? ((root.dataSource.mqttReceptionMetadata.topics || ({})).GlobalLogisticsStatus || ({})) : ({})
+                    SourceRow {
+                        objectName: "rm27LogisticsSession"
+                        primary: "接收身份: " + (logisticsSection.snapshot.received ? logisticsSection.snapshot.identity : "未收到") + (logisticsSection.snapshot.received ? " · " + (logisticsSection.snapshot.team === "blue" ? "蓝方" : "红方") : "") + (logisticsSection.snapshot.received && !logisticsSection.snapshot.identityMatches ? "（旧身份）" : "")
+                        detail: logisticsSection.snapshot.source === "official_mqtt" ? "来源: MQTT · 会话: " + (logisticsSection.receipt.sessionState || "never") + (logisticsSection.receipt.receivedAt ? " · 本机接收 " + Qt.formatDateTime(logisticsSection.receipt.receivedAt, "HH:mm:ss.zzz") : "") : "来源未确认"
+                    }
+                    Repeater {
+                        model: [
+                            {key:"remaining_economy", name:"己方当前经济"},
+                            {key:"total_economy_obtained", name:"己方累计总经济"},
+                            {key:"tech_level", name:"己方科技等级"},
+                            {key:"encryption_level", name:"己方加密等级"}
+                        ]
+                        delegate: SourceRow {
+                            required property var modelData
+                            property var item: (logisticsSection.snapshot.fields || ({}))[modelData.key]
+                            property var previous: (logisticsSection.snapshot.acceptedStrings || ({}))[modelData.key]
+                            property var previousSource: (logisticsSection.snapshot.acceptedSource || ({}))[modelData.key]
+                            property var previousReceipt: (logisticsSection.receipt.fieldUpdates || ({}))[modelData.key]
+                            objectName: "rm27Logistics_" + modelData.key
+                            primary: modelData.name + ": " + (!item || item.state === "unreported" ? "未上报" + (previous === undefined ? "" : "（上次: " + previous + "）") : item.valueString + (item.legacyProjection ? "（超出旧类型范围）" : ""))
+                            detail: !item || item.state === "unreported" ? (previous === undefined ? "未上报" : previousSource === "official_mqtt" && previousReceipt ? "上次有效 · 会话 " + previousReceipt.session + " · 本机接收 " + Qt.formatDateTime(previousReceipt.receivedAt, "HH:mm:ss.zzz") : "上次有效 · 来源未确认") : "valid"
+                        }
+                    }
+                    SourceRow { primary: "数值仅表示协议观测"; detail: "科技/加密等级不代表安装状态或操作资格" }
                 }
             }
             Text { text: "全局比赛状态（官方 GameStatus 观测）"; color: "#8de0ff"; font.pixelSize: 21 }

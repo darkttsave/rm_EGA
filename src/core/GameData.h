@@ -702,6 +702,7 @@ Q_PROPERTY(QVariantMap robotRespawnStatus READ robotRespawnStatus NOTIFY robotRe
   Q_PROPERTY(QVariantMap robotDynamicStatus READ robotDynamicStatus NOTIFY robotDynamicStatusChanged)
   Q_PROPERTY(QVariantMap gameStatusObservation READ gameStatusObservation NOTIFY gameStatusObservationChanged)
   Q_PROPERTY(QVariantMap mqttReceptionMetadata READ mqttReceptionMetadata NOTIFY mqttReceptionMetadataChanged)
+  Q_PROPERTY(QVariantMap logisticsObservation READ logisticsObservation NOTIFY logisticsObservationChanged)
   Q_PROPERTY(QVariantMap respawnObservation READ respawnObservation NOTIFY respawnObservationChanged)
   Q_PROPERTY(QVariantMap penaltyObservation READ penaltyObservation NOTIFY penaltyObservationChanged)
   Q_PROPERTY(QVariantMap injuryObservation READ injuryObservation NOTIFY injuryObservationChanged)
@@ -730,6 +731,7 @@ public:
 
   QVariantMap mqttReceptionMetadata() const;
   QVariantMap globalHealthObservation() const;
+  QVariantMap logisticsObservation() const;
   QVariantMap respawnObservation() const;
   void updateOfficialRespawnObservation(const robomaster::RobotRespawnStatus &data);
   QVariantMap penaltyObservation() const;
@@ -1415,6 +1417,7 @@ signals:
   void currentRobotIdentityChanged();
   void mqttReceptionMetadataChanged();
   void globalHealthObservationChanged();
+  void logisticsObservationChanged();
   void respawnObservationChanged();
   void penaltyObservationChanged();
   void injuryObservationChanged();
@@ -1532,6 +1535,7 @@ private:
 
   // 0x0101 场地事件数据缓存
   quint32 m_eventData = 0;
+  QVariantMap m_logisticsObservation;
   QVariantMap m_respawnObservation;
   QVariantMap m_penaltyObservation;
   QVariantMap m_injuryObservation;

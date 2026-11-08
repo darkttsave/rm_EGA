@@ -1241,7 +1241,7 @@ void NetworkManager::processMqttMessage(const QString &topic,
   }
   dumpMqttEvent(QStringLiteral("received"), topic, payload, m_gameData);
 
-  if ((topic == QLatin1String("RobotModuleStatus") || topic == QLatin1String("RobotDynamicStatus") || topic == QLatin1String("GlobalUnitStatus") || topic == QLatin1String("PenaltyInfo") || topic == QLatin1String("RobotInjuryStat") || topic == QLatin1String("RobotRespawnStatus")) && m_mqttManager &&
+  if ((topic == QLatin1String("RobotModuleStatus") || topic == QLatin1String("RobotDynamicStatus") || topic == QLatin1String("GlobalUnitStatus") || topic == QLatin1String("GlobalLogisticsStatus") || topic == QLatin1String("PenaltyInfo") || topic == QLatin1String("RobotInjuryStat") || topic == QLatin1String("RobotRespawnStatus")) && m_mqttManager &&
       (!m_mqttManager->isConnected() || m_mqttManager->clientId() != QString::number(m_gameData->getCurrentRobotId()))) {
     qWarning() << topic << "ignored: MQTT identity does not match current robot";
     return;
@@ -1276,7 +1276,7 @@ void NetworkManager::processMqttMessage(const QString &topic,
       m_gameData->recordMqttObservation(topic, 0, m_receiptWallMs, m_receiptMonotonicMs);
     else if (topic == QLatin1String("RobotStaticStatus"))
       m_gameData->recordMqttObservation(topic, parsedFields.value("robot_id").toInt(), m_receiptWallMs, m_receiptMonotonicMs);
-    else if (topic == QLatin1String("RobotDynamicStatus") || topic == QLatin1String("RobotModuleStatus") || topic == QLatin1String("GlobalUnitStatus") || topic == QLatin1String("PenaltyInfo") || topic == QLatin1String("RobotInjuryStat") || topic == QLatin1String("RobotRespawnStatus"))
+    else if (topic == QLatin1String("RobotDynamicStatus") || topic == QLatin1String("RobotModuleStatus") || topic == QLatin1String("GlobalUnitStatus") || topic == QLatin1String("GlobalLogisticsStatus") || topic == QLatin1String("PenaltyInfo") || topic == QLatin1String("RobotInjuryStat") || topic == QLatin1String("RobotRespawnStatus"))
       m_gameData->recordMqttObservation(topic, m_gameData->getCurrentRobotId(), m_receiptWallMs, m_receiptMonotonicMs);
     else if (topic == QLatin1String("Event") && parsedFields.value("event_id").toInt() == 16)
       m_gameData->recordMqttObservation(QStringLiteral("Event16"), 0, m_receiptWallMs, m_receiptMonotonicMs);
@@ -1290,39 +1290,6 @@ void NetworkManager::processMqttMessage(const QString &topic,
   // 根据 Topic 解析对应的 Protobuf 消息
   if (officialResult != OfficialMessageHandler::Result::Unsupported) {
     // 已由官方消息处理模块处理，仍执行下面的公共收尾。
-  } else if (topic == "GlobalLogisticsStatus") {
-    robomaster::GlobalLogisticsStatus msg;
-    if (msg.ParseFromArray(payload.data(), payload.size())) {
-      dumpMqttEvent(
-          QStringLiteral("parsed"), topic, payload, m_gameData,
-          QStringLiteral("GlobalLogisticsStatus remaining=%1 tech=%2 encryption=%3")
-              .arg(msg.remaining_economy())
-              .arg(msg.tech_level())
-              .arg(msg.encryption_level()),
-          QJsonObject{{QStringLiteral("remaining_economy"),
-                       static_cast<int>(msg.remaining_economy())},
-                      {QStringLiteral("tech_level"),
-                       static_cast<int>(msg.tech_level())},
-                      {QStringLiteral("encryption_level"),
-                       static_cast<int>(msg.encryption_level())}});
-            robomaster::GameInfo gameInfo;
-      const bool isBluePerspective = m_gameData->getMyRobotId() >= 100;
-      gameInfo.set_stage(static_cast<robomaster::GameStage>(m_gameData->getCurrentStage()));
-      gameInfo.set_time_remaining(m_gameData->getGameTime());
-      gameInfo.set_is_paused(m_gameData->is_paused());
-      gameInfo.set_current_round(static_cast<uint32_t>(m_gameData->currentRound()));
-      gameInfo.set_red_score(static_cast<uint32_t>(m_gameData->redScore()));
-      gameInfo.set_blue_score(static_cast<uint32_t>(m_gameData->blueScore()));
-      gameInfo.set_red_economy(static_cast<uint32_t>(m_gameData->redEconomy()));
-      gameInfo.set_blue_economy(static_cast<uint32_t>(m_gameData->blueEconomy()));
-      if (isBluePerspective) {
-        gameInfo.set_blue_economy(msg.remaining_economy());
-      } else {
-        gameInfo.set_red_economy(msg.remaining_economy());
-      }
-      m_gameData->updateGameState(gameInfo);
-      m_gameData->updateGlobalLogisticsStatus(msg);
-    }
   } else if (topic == "RobotPosition") {
     robomaster::RobotPosition msg;
     if (msg.ParseFromArray(payload.data(), payload.size())) {

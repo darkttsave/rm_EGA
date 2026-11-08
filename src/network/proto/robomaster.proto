@@ -409,10 +409,10 @@ message GlobalUnitStatus {
 }
 
 message GlobalLogisticsStatus {
-  uint32 remaining_economy = 1;
-  uint64 total_economy_obtained = 2;
-  uint32 tech_level = 3;
-  uint32 encryption_level = 4;
+  optional uint32 remaining_economy = 1;
+  optional uint64 total_economy_obtained = 2;
+  optional uint32 tech_level = 3;
+  optional uint32 encryption_level = 4;
 }
 
 message GlobalSpecialMechanism {

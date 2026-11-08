@@ -110,12 +110,9 @@ void MqttClient::handlePayload(const QString &topic,
   }
 
   if (topic == QStringLiteral("GlobalLogisticsStatus")) {
-    robomaster::GlobalLogisticsStatus msg;
-    if (msg.ParseFromArray(payload.constData(), payload.size())) {
-      m_gameData->updateGlobalLogisticsStatus(msg);
-      emit messageReceived(topic, payload.size());
-      return;
-    }
+    // The Qt MQTT fallback lacks identity/session queue isolation.
+    qWarning() << "GlobalLogisticsStatus ignored: Qt MQTT session isolation unavailable";
+    return;
   }
 
   if (topic == QStringLiteral("GlobalSpecialMechanism")) {
