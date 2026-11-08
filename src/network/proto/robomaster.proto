@@ -404,8 +404,10 @@ message GlobalUnitStatus {
   uint32 enemy_outpost_status = 10;
   repeated uint32 robot_health = 11;
   repeated int32 robot_bullets = 12;
-  uint32 total_damage_ally = 13;
-  uint32 total_damage_enemy = 14;
+  optional uint32 total_damage_ally = 13;
+  optional uint32 total_damage_enemy = 14;
+  optional uint32 total_CP_ally = 15;
+  optional uint32 total_CP_enemy = 16;
 }
 
 message GlobalLogisticsStatus {

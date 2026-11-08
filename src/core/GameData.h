@@ -1546,6 +1546,9 @@ private:
   QVariantMap m_globalHealthFields;
   QVariantMap m_globalHealthAccepted;
   QVariantMap m_globalHealthAcceptedSource;
+  QVariantMap m_globalRawFields;
+  QVariantMap m_globalRawAccepted;
+  QVariantMap m_globalRawAcceptedSource;
   QVariantMap m_localHeatObservation;
   QHash<int, QVariantMap> m_refereeRobotObservations;
   int m_videoReceptionState = -1;

@@ -2009,7 +2009,8 @@ QVariantMap GameData::globalHealthObservation() const {
   return {{"received", m_globalHealthReceived}, {"receiverId", m_globalHealthReceiver},
           {"identityMatches", m_globalHealthIdentityEpoch == m_mqttIdentityEpoch && m_globalHealthReceiver == m_currentRobotId},
           {"source", m_globalHealthMqttVerified ? "official_mqtt" : "protocol_unverified"},
-          {"fields", m_globalHealthFields}, {"accepted", m_globalHealthAccepted}, {"acceptedSource", m_globalHealthAcceptedSource}};
+          {"fields", m_globalHealthFields}, {"accepted", m_globalHealthAccepted}, {"acceptedSource", m_globalHealthAcceptedSource},
+          {"rawFields", m_globalRawFields}, {"rawAccepted", m_globalRawAccepted}, {"rawAcceptedSource", m_globalRawAcceptedSource}};
 }
 QVariantMap GameData::refereeRobotObservation(int identity) const {
   return m_refereeRobotObservations.value(identity);
@@ -2096,6 +2097,9 @@ void GameData::recordMqttObservation(const QString &topic, int identity, qint64 
     for (auto it = m_globalHealthFields.cbegin(); it != m_globalHealthFields.cend(); ++it)
       if (it.value().toMap().value("state") == QLatin1String("valid"))
         m_globalHealthAcceptedSource[it.key()] = QStringLiteral("official_mqtt");
+    for (auto it = m_globalRawFields.cbegin(); it != m_globalRawFields.cend(); ++it)
+      if (it.key() != QLatin1String("robot_bullets") && it.value().toMap().value("state") == QLatin1String("valid"))
+        m_globalRawAcceptedSource[it.key()] = QStringLiteral("official_mqtt");
     emit globalHealthObservationChanged();
   }
   if (topic == QLatin1String("PenaltyInfo")) { m_penaltyObservation["source"] = QStringLiteral("official_mqtt"); emit penaltyObservationChanged(); }
@@ -2123,7 +2127,10 @@ void GameData::recordMqttObservation(const QString &topic, int identity, qint64 
   else if (topic == QLatin1String("RobotRespawnStatus")) fields = m_respawnObservation.value("fields").toMap();
   else if (topic == QLatin1String("PenaltyInfo")) fields = m_penaltyObservation.value("fields").toMap();
   else if (topic == QLatin1String("RobotInjuryStat")) fields = m_injuryObservation.value("fields").toMap();
-  else if (topic == QLatin1String("GlobalUnitStatus")) fields = m_globalHealthFields;
+  else if (topic == QLatin1String("GlobalUnitStatus")) {
+    fields = m_globalHealthFields;
+    for (auto it = m_globalRawFields.cbegin(); it != m_globalRawFields.cend(); ++it) fields[it.key()] = it.value();
+  }
   else if (topic == QLatin1String("GameStatus")) fields = m_gameStatusFields;
   else if (topic == QLatin1String("RobotDynamicStatus")) fields = m_dynamicObservation;
   else if (isStatic) {
@@ -2659,6 +2666,8 @@ void GameData::updateGlobalUnitStatus(const robomaster::GlobalUnitStatus &data) 
   if (m_globalHealthIdentityEpoch != m_mqttIdentityEpoch) {
     m_globalHealthAccepted.clear();
     m_globalHealthAcceptedSource.clear();
+    m_globalRawAccepted.clear();
+    m_globalRawAcceptedSource.clear();
   }
   m_globalHealthIdentityEpoch = m_mqttIdentityEpoch;
   m_globalHealthReceiver = m_currentRobotId;
@@ -2677,6 +2686,25 @@ void GameData::updateGlobalUnitStatus(const robomaster::GlobalUnitStatus &data) 
     }
     m_globalHealthFields[QString::number(roster.at(i))] = observation;
   }
+  m_globalRawFields.clear();
+  QVariantList bullets;
+  for (const auto value : data.robot_bullets()) bullets.append(value);
+  // Proto3 repeated fields do not encode presence for an empty array.
+  m_globalRawFields["robot_bullets"] = QVariantMap{{"state", "valid"}, {"values", bullets}, {"length", bullets.size()}, {"emptyPresenceUnknown", bullets.isEmpty()}};
+  auto observeRaw = [&](const char *name, bool present, quint32 value) {
+    const QString key = QString::fromLatin1(name);
+    QVariantMap field{{"state", present ? "valid" : "unreported"}};
+    if (present) {
+      field["value"] = QVariant::fromValue(value);
+      m_globalRawAccepted[key] = QVariant::fromValue(value);
+      m_globalRawAcceptedSource[key] = QStringLiteral("protocol_unverified");
+    }
+    m_globalRawFields[key] = field;
+  };
+  observeRaw("total_damage_ally", data.has_total_damage_ally(), data.total_damage_ally());
+  observeRaw("total_damage_enemy", data.has_total_damage_enemy(), data.total_damage_enemy());
+  observeRaw("total_cp_ally", data.has_total_cp_ally(), data.total_cp_ally());
+  observeRaw("total_cp_enemy", data.has_total_cp_enemy(), data.total_cp_enemy());
   emit globalHealthObservationChanged();
   const bool hasEnemySnapshot = data.robot_health_size() > 4 ||
       data.enemy_base_health() > 0 || data.enemy_outpost_health() > 0 ||

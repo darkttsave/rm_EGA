@@ -282,9 +282,12 @@ private slots:
     QTRY_VERIFY_WITH_TIMEOUT(metadata().value("staticByRobot").toMap().contains("101"), 5000);
     QCOMPARE(data.getRobotById(1)->maxHP, 300); QCOMPARE(data.getRobotById(101)->maxHP, 400);
     robomaster::GlobalUnitStatus global; global.add_robot_health(111);
+    global.add_robot_bullets(-1); global.add_robot_bullets(42); global.set_total_cp_ally(0); global.set_total_damage_ally(100);
     QVERIFY(publisher.publish("GlobalUnitStatus", bytes(global), 1));
     QTRY_COMPARE_WITH_TIMEOUT(topicMeta("GlobalUnitStatus").value("sessionState").toString(), QString("current"), 5000);
     QCOMPARE(data.globalHealthObservation().value("accepted").toMap().value("1").toUInt(), 111u);
+    QCOMPARE(data.globalHealthObservation().value("rawFields").toMap().value("total_cp_ally").toMap().value("value").toUInt(), 0u);
+    QCOMPARE(data.globalHealthObservation().value("rawFields").toMap().value("robot_bullets").toMap().value("length").toInt(), 2);
     QCOMPARE(data.globalHealthObservation().value("source").toString(), QString("official_mqtt"));
     QCOMPARE(data.globalHealthObservation().value("acceptedSource").toMap().value("1").toString(), QString("official_mqtt"));
     QCOMPARE(topicMeta("GlobalUnitStatus").value("identity").toInt(), 1);
@@ -322,7 +325,7 @@ private slots:
     const auto identityHandler = qInstallMessageHandler(captureDynamicCallback);
     msg.set_current_heat(55.5f);
     const bool identitySent = publisher.publish("RobotDynamicStatus", bytes(msg), 1);
-    global.Clear(); global.add_robot_health(999); publisher.publish("GlobalUnitStatus", bytes(global), 1);
+    global.Clear(); global.add_robot_health(999); global.set_total_cp_ally(999); publisher.publish("GlobalUnitStatus", bytes(global), 1);
     penalty.set_penalty_type(3); injury.set_total_damage(999);
     publisher.publish("PenaltyInfo", bytes(penalty), 1); publisher.publish("RobotInjuryStat", bytes(injury), 1);
     respawn.set_current_respawn_progress(999); publisher.publish("RobotRespawnStatus", bytes(respawn), 1);
@@ -335,6 +338,7 @@ private slots:
     QVERIFY(identitySent); QVERIFY(identitySeen);
     QVERIFY(!data.robotDynamicStatus().value("received").toBool());
     QCOMPARE(data.globalHealthObservation().value("accepted").toMap().value("1").toUInt(), 111u);
+    QCOMPARE(data.globalHealthObservation().value("rawFields").toMap().value("total_cp_ally").toMap().value("value").toUInt(), 0u);
     QCOMPARE(data.injuryObservation().value("fields").toMap().value("total_damage").toMap().value("value").toUInt(), 10u);
     QCOMPARE(data.penaltyObservation().value("fields").toMap().value("penalty_type").toMap().value("value").toUInt(), 1u);
     QCOMPARE(topicMeta("PenaltyInfo").value("sessionState").toString(), QString("identity_changed"));
@@ -393,10 +397,13 @@ private slots:
     QTRY_COMPARE_WITH_TIMEOUT(topicMeta("PenaltyInfo").value("sessionState").toString(), QString("current"), 5000);
     QTRY_COMPARE_WITH_TIMEOUT(topicMeta("RobotInjuryStat").value("sessionState").toString(), QString("current"), 5000);
     QCOMPARE(data.injuryObservation().value("identity").toInt(), 101);
-    global.Clear(); global.add_robot_health(212);
+    global.Clear(); global.add_robot_health(212); global.set_total_cp_enemy(321); global.add_robot_bullets(-23);
     QVERIFY(publisher.publish("GlobalUnitStatus", bytes(global), 1));
     QTRY_COMPARE_WITH_TIMEOUT(data.globalHealthObservation().value("receiverId").toInt(), 101, 5000);
     QCOMPARE(data.globalHealthObservation().value("fields").toMap().value("101").toMap().value("value").toUInt(), 212u);
+    QCOMPARE(data.globalHealthObservation().value("rawFields").toMap().value("total_cp_enemy").toMap().value("value").toUInt(), 321u);
+    QCOMPARE(data.globalHealthObservation().value("rawFields").toMap().value("robot_bullets").toMap().value("values").toList().at(0).toInt(), -23);
+    QCOMPARE(topicMeta("GlobalUnitStatus").value("fieldUpdates").toMap().value("total_cp_enemy").toMap().value("session").toULongLong(), metadata().value("session").toULongLong());
     QCOMPARE(topicMeta("GlobalUnitStatus").value("sessionState").toString(), QString("current"));
     QCOMPARE(topicMeta("Event16").value("sessionState").toString(), QString("historical"));
     QCOMPARE(topicMeta("RobotDynamicStatus").value("sessionState").toString(), QString("historical"));
@@ -843,6 +850,60 @@ private slots:
     for (const QString &topic : {QString("GlobalUnitStatus"), QString("RobotStaticStatus"), QString("RobotDynamicStatus")})
       QCOMPARE(OfficialMessageHandler::handle(topic, invalid, data, logger), OfficialMessageHandler::Result::ParseFailed);
     QCOMPARE(data.redBaseHealth(), 3210); QCOMPARE(data.getRobotById(3)->currentHP, 345); QCOMPARE(logs, 3);
+  }
+  void globalRawObservations() {
+    Q_INIT_RESOURCE(qml);
+    GameData data; data.setCurrentRobotId(1);
+    QQuickWidget panel; panel.rootContext()->setContextProperty("gameData", &data);
+    panel.setSource(QUrl(QStringLiteral("qrc:/qml/RM27DevPanel.qml")));
+    QCOMPARE(panel.status(), QQuickWidget::Ready);
+    std::function<QQuickItem *(QQuickItem *, const QString &)> findVisual = [&](QQuickItem *item, const QString &name) -> QQuickItem * {
+      if (item->objectName() == name) return item;
+      for (auto *child : item->childItems()) if (auto *found = findVisual(child, name)) return found;
+      return nullptr;
+    };
+    auto *bullets = findVisual(panel.rootObject(), "rm27GlobalRawBullets");
+    auto *cp = findVisual(panel.rootObject(), "rm27GlobalRaw_total_cp_ally");
+    auto *damage = findVisual(panel.rootObject(), "rm27GlobalRaw_total_damage_enemy");
+    auto *session = findVisual(panel.rootObject(), "rm27GlobalRawSession");
+    QVERIFY(bullets); QVERIFY(cp); QVERIFY(damage); QVERIFY(session);
+    robomaster::GlobalUnitStatus msg;
+    msg.add_robot_health(120); msg.add_robot_bullets(std::numeric_limits<int32_t>::min()); msg.add_robot_bullets(-1);
+    msg.add_robot_bullets(0); msg.add_robot_bullets(std::numeric_limits<int32_t>::max()); msg.add_robot_bullets(17);
+    msg.set_total_damage_ally(0); msg.set_total_damage_enemy(4294967295u); msg.set_total_cp_ally(0); msg.set_total_cp_enemy(4294967295u);
+    QCOMPARE(OfficialMessageHandler::handle("GlobalUnitStatus", bytes(msg), data), OfficialMessageHandler::Result::Parsed);
+    auto observation = data.globalHealthObservation(); auto fields = observation.value("rawFields").toMap();
+    auto array = fields.value("robot_bullets").toMap();
+    QCOMPARE(array.value("length").toInt(), 5); QCOMPARE(array.value("values").toList(), QVariantList({INT32_MIN, -1, 0, INT32_MAX, 17}));
+    QCOMPARE(fields.value("total_cp_ally").toMap().value("state").toString(), QString("valid"));
+    QCOMPARE(fields.value("total_cp_ally").toMap().value("value").toUInt(), 0u);
+    QCOMPARE(fields.value("total_cp_enemy").toMap().value("value").toUInt(), 4294967295u);
+    QCOMPARE(fields.value("total_damage_ally").toMap().value("value").toUInt(), 0u);
+    QCOMPARE(fields.value("total_damage_enemy").toMap().value("value").toUInt(), 4294967295u);
+    QCOMPARE(data.getRobotById(1)->currentHP, 120);
+    QTRY_VERIFY(bullets->property("primary").toString().contains(QStringLiteral("[-2147483648, -1, 0, 2147483647, 17]")));
+    QTRY_VERIFY(cp->property("primary").toString().contains(QStringLiteral("原始）: 0")));
+    QTRY_VERIFY(damage->property("primary").toString().contains(QStringLiteral("4294967295")));
+    QTRY_VERIFY(session->property("primary").toString().contains(QStringLiteral("红方")));
+    data.setMqttSessionState(true, "1"); data.recordMqttObservation("GlobalUnitStatus", 1, 100000, 1000);
+    const auto stamp = data.mqttReceptionMetadata().value("topics").toMap().value("GlobalUnitStatus").toMap().value("fieldUpdates").toMap().value("total_cp_ally").toMap();
+    QVERIFY(stamp.value("receivedAt").toDateTime().isValid());
+    msg.Clear(); msg.set_total_damage_enemy(8); data.updateGlobalUnitStatus(msg);
+    data.recordMqttObservation("GlobalUnitStatus", 1, 200000, 2000);
+    observation = data.globalHealthObservation(); fields = observation.value("rawFields").toMap();
+    QCOMPARE(fields.value("total_cp_ally").toMap().value("state").toString(), QString("unreported"));
+    QCOMPARE(observation.value("rawAccepted").toMap().value("total_cp_ally").toUInt(), 0u);
+    QCOMPARE(fields.value("robot_bullets").toMap().value("length").toInt(), 0);
+    QVERIFY(fields.value("robot_bullets").toMap().value("emptyPresenceUnknown").toBool());
+    QTRY_VERIFY(cp->property("primary").toString().contains(QStringLiteral("上次: 0")));
+    QTRY_VERIFY(bullets->property("detail").toString().contains(QStringLiteral("不可区分")));
+    data.setCurrentRobotId(101); QVERIFY(!data.globalHealthObservation().value("identityMatches").toBool());
+    msg.Clear(); msg.add_robot_bullets(-7); msg.set_total_cp_ally(55); data.updateGlobalUnitStatus(msg);
+    QCOMPARE(data.globalHealthObservation().value("receiverId").toInt(), 101);
+    QCOMPARE(data.globalHealthObservation().value("rawFields").toMap().value("total_cp_ally").toMap().value("value").toUInt(), 55u);
+    QVERIFY(!data.globalHealthObservation().value("rawAccepted").toMap().contains("total_cp_enemy"));
+    QTRY_VERIFY(session->property("primary").toString().contains(QStringLiteral("蓝方")));
+    QCOMPARE(OfficialMessageHandler::handle("GlobalUnitStatus", QByteArray::fromHex("7880"), data), OfficialMessageHandler::Result::ParseFailed);
   }
   void globalSourcesAndDeveloperPanel() {
     Q_INIT_RESOURCE(qml);

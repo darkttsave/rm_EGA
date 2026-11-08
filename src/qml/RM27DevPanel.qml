@@ -289,6 +289,43 @@ Rectangle {
                 }
             }
             SourceCard {
+                title: "全局单位 · 协议原始累计数据"
+                Column {
+                    id: globalRawSection
+                    width: parent.width; spacing: 6
+                    property var snapshot: root.dataSource ? root.dataSource.globalHealthObservation : ({})
+                    property var receipt: root.dataSource ? ((root.dataSource.mqttReceptionMetadata.topics || ({})).GlobalUnitStatus || ({})) : ({})
+                    SourceRow {
+                        objectName: "rm27GlobalRawSession"
+                        primary: "接收身份: " + (globalRawSection.snapshot.received ? globalRawSection.snapshot.receiverId : "未收到") + (globalRawSection.snapshot.received ? " · " + (globalRawSection.snapshot.receiverId >= 100 ? "蓝方" : "红方") : "") + (globalRawSection.snapshot.received && !globalRawSection.snapshot.identityMatches ? "（旧身份）" : "")
+                        detail: globalRawSection.snapshot.source === "official_mqtt" ? "来源: MQTT · 会话: " + (globalRawSection.receipt.sessionState || "never") + (globalRawSection.receipt.receivedAt ? " · 本机接收 " + Qt.formatDateTime(globalRawSection.receipt.receivedAt, "HH:mm:ss.zzz") : "") : "来源未确认"
+                    }
+                    SourceRow {
+                        objectName: "rm27GlobalRawBullets"
+                        property var field: (globalRawSection.snapshot.rawFields || ({})).robot_bullets
+                        primary: "机器人剩余累计发弹量数组: " + (!field ? "未收到" : "[" + field.values.join(", ") + "]")
+                        detail: !field ? "未收到" : "长度: " + field.length + (field.emptyPresenceUnknown ? " · 空数组与未传递不可区分" : " · 保持原始顺序")
+                    }
+                    Repeater {
+                        model: [
+                            {key:"total_damage_ally", name:"己方累计总伤害"}, {key:"total_damage_enemy", name:"对方累计总伤害"},
+                            {key:"total_cp_ally", name:"己方累计控制度（原始）"}, {key:"total_cp_enemy", name:"对方累计控制度（原始）"}
+                        ]
+                        delegate: SourceRow {
+                            required property var modelData
+                            property var item: (globalRawSection.snapshot.rawFields || ({}))[modelData.key]
+                            property var previous: (globalRawSection.snapshot.rawAccepted || ({}))[modelData.key]
+                            property var previousSource: (globalRawSection.snapshot.rawAcceptedSource || ({}))[modelData.key]
+                            property var previousReceipt: (globalRawSection.receipt.fieldUpdates || ({}))[modelData.key]
+                            objectName: "rm27GlobalRaw_" + modelData.key
+                            primary: modelData.name + ": " + (!item || item.state === "unreported" ? "未上报" + (previous === undefined ? "" : "（上次: " + previous + "）") : String(item.value))
+                            detail: !item || item.state === "unreported" ? (previous === undefined ? "未上报" : previousSource === "official_mqtt" && previousReceipt ? "上次有效 · 会话 " + previousReceipt.session + " · 本机接收 " + Qt.formatDateTime(previousReceipt.receivedAt, "HH:mm:ss.zzz") : "上次有效 · 来源未确认") : "valid"
+                        }
+                    }
+                    SourceRow { primary: "仅为原始观测"; detail: "不映射弹种或机器人，不推断控制区归属" }
+                }
+            }
+            SourceCard {
                 title: "己方后勤 · 官方观测"
                 Column {
                     id: logisticsSection
