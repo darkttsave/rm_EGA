@@ -552,6 +552,7 @@ void GameData::setCurrentRobotId(qint64 robotId) {
   if (m_currentRobotId == next) return;
   m_currentRobotId = next;
   ++m_mqttIdentityEpoch;
+  emit globalHealthObservationChanged();
   emit currentRobotIdentityChanged();
   emit mqttReceptionMetadataChanged();
   clearRobotDynamicStatus();
@@ -1854,6 +1855,11 @@ void GameData::updateRobotStaticStatus(const robomaster::RobotStaticStatus &data
     return;
   }
   const int robotId = static_cast<int>(identity.rawId);
+  QVariantMap referee{{"received", true}, {"robotId", robotId}, {"source", "protocol_unverified"}};
+  if (data.has_connection_state()) referee["connection_state"] = data.connection_state();
+  if (data.has_field_state()) referee["field_state"] = data.field_state();
+  if (data.has_alive_state()) referee["alive_state"] = data.alive_state();
+  m_refereeRobotObservations[robotId] = referee;
   qDebug() << "[RobotStaticStatus] robotId=" << robotId
            << "raw robot_type=" << data.robot_type();
   if (*identity.role == RobotType::DART && data.has_connection_state()) {
@@ -1953,6 +1959,30 @@ void GameData::updateRobotStaticStatus(const robomaster::RobotStaticStatus &data
 }
 }
 
+QVariantMap GameData::globalHealthObservation() const {
+  return {{"received", m_globalHealthReceived}, {"receiverId", m_globalHealthReceiver},
+          {"identityMatches", m_globalHealthIdentityEpoch == m_mqttIdentityEpoch && m_globalHealthReceiver == m_currentRobotId},
+          {"source", m_globalHealthMqttVerified ? "official_mqtt" : "protocol_unverified"},
+          {"fields", m_globalHealthFields}, {"accepted", m_globalHealthAccepted}, {"acceptedSource", m_globalHealthAcceptedSource}};
+}
+QVariantMap GameData::refereeRobotObservation(int identity) const {
+  return m_refereeRobotObservations.value(identity);
+}
+QVariantMap GameData::legacyGameProjection() const {
+  return {{"current_stage", static_cast<int>(m_gameState.gameProgress)}, {"stage_countdown_sec", m_gameState.gameTime},
+          {"red_score", m_gameState.redScore}, {"blue_score", m_gameState.blueScore},
+          {"current_round", m_gameState.currentRound}, {"is_paused", m_gameState.isPaused}};
+}
+void GameData::setVideoReceptionState(int state) {
+  if (state < -1 || state > 1 || m_videoReceptionState == state) return;
+  m_videoReceptionState = state; emit videoReceptionStateChanged();
+}
+void GameData::recordLocalHeatObservation(int identity, float value, const QString &source) {
+  if (source != QLatin1String("debug_test") && source != QLatin1String("simulator") && source != QLatin1String("local_input")) return;
+  m_localHeatObservation = {{"robotId", identity}, {"value", value}, {"source", source}, {"recordedAt", QDateTime::currentDateTime()}};
+  emit localHeatObservationChanged();
+}
+
 void GameData::setMqttSessionState(bool connected, const QString &clientId) {
   if (connected && !m_mqttSessionConnected) ++m_mqttSession;
   m_mqttSessionConnected = connected;
@@ -1974,10 +2004,10 @@ QVariantMap GameData::mqttReceptionMetadata() const {
     return record;
   };
   QVariantMap topics;
-  for (const char *name : {"GameStatus", "RobotDynamicStatus", "RobotModuleStatus", "Event16"}) {
+  for (const char *name : {"GameStatus", "RobotDynamicStatus", "RobotModuleStatus", "GlobalUnitStatus", "Event16"}) {
     const QString key = QString::fromLatin1(name);
     topics[key] = annotate(m_mqttTopicMetadata.value(key).toMap(),
-        key == QLatin1String("RobotDynamicStatus") || key == QLatin1String("RobotModuleStatus"));
+        key == QLatin1String("RobotDynamicStatus") || key == QLatin1String("RobotModuleStatus") || key == QLatin1String("GlobalUnitStatus"));
   }
   QVariantMap staticRobots;
   for (auto it = m_mqttStaticMetadata.cbegin(); it != m_mqttStaticMetadata.cend(); ++it)
@@ -1990,7 +2020,7 @@ QVariantMap GameData::mqttReceptionMetadata() const {
 void GameData::recordMqttObservation(const QString &topic, int identity, qint64 receivedMs, qint64 monotonicMs) {
   if (!m_mqttSessionConnected || receivedMs <= 0) return;
   const bool isStatic = topic == QLatin1String("RobotStaticStatus");
-  const bool isIdentityScoped = topic == QLatin1String("RobotDynamicStatus") || topic == QLatin1String("RobotModuleStatus");
+  const bool isIdentityScoped = topic == QLatin1String("RobotDynamicStatus") || topic == QLatin1String("RobotModuleStatus") || topic == QLatin1String("GlobalUnitStatus");
   if (isIdentityScoped) {
     const auto resolved = RM::resolveRobotIdentity(identity);
     if (resolved.kind != RM::IdentityKind::Robot || !resolved.team) return;
@@ -2001,7 +2031,7 @@ void GameData::recordMqttObservation(const QString &topic, int identity, qint64 
   QVariantMap record = container.value(key).toMap();
   QVariantMap fieldUpdates = record.value("fieldUpdates").toMap();
   // No-ID fields belong to their observed identity, never a newly selected robot.
-  if ((topic == QLatin1String("RobotDynamicStatus") || topic == QLatin1String("RobotModuleStatus")) &&
+  if (isIdentityScoped &&
       record.contains("identity") && (record.value("identity").toInt() != identity ||
       record.value("identityEpoch").toULongLong() != m_mqttIdentityEpoch)) fieldUpdates.clear();
   record["received"] = true;
@@ -2011,8 +2041,20 @@ void GameData::recordMqttObservation(const QString &topic, int identity, qint64 
   record["identity"] = identity;
   record["identityEpoch"] = QVariant::fromValue(m_mqttIdentityEpoch);
   record["source"] = QStringLiteral("official_mqtt");
+  if (isStatic && m_refereeRobotObservations.contains(identity)) {
+    m_refereeRobotObservations[identity]["source"] = QStringLiteral("official_mqtt");
+    m_refereeRobotObservations[identity]["session"] = QVariant::fromValue(m_mqttSession);
+  }
+  if (topic == QLatin1String("GlobalUnitStatus")) {
+    m_globalHealthMqttVerified = true;
+    for (auto it = m_globalHealthFields.cbegin(); it != m_globalHealthFields.cend(); ++it)
+      if (it.value().toMap().value("state") == QLatin1String("valid"))
+        m_globalHealthAcceptedSource[it.key()] = QStringLiteral("official_mqtt");
+    emit globalHealthObservationChanged();
+  }
   QVariantMap fields;
-  if (topic == QLatin1String("GameStatus")) fields = m_gameStatusFields;
+  if (topic == QLatin1String("GlobalUnitStatus")) fields = m_globalHealthFields;
+  else if (topic == QLatin1String("GameStatus")) fields = m_gameStatusFields;
   else if (topic == QLatin1String("RobotDynamicStatus")) fields = m_dynamicObservation;
   else if (isStatic) {
     const RobotData *robot = getRobotById(identity);
@@ -2544,6 +2586,28 @@ void GameData::updateGlobalUnitStatus(const robomaster::GlobalUnitStatus &data) 
                                                    : QList<int>{1, 3, 4, 7};
   const QList<int> enemyRoster = isBluePerspective ? QList<int>{1, 3, 4, 7}
                                                     : QList<int>{101, 103, 104, 107};
+  if (m_globalHealthIdentityEpoch != m_mqttIdentityEpoch) {
+    m_globalHealthAccepted.clear();
+    m_globalHealthAcceptedSource.clear();
+  }
+  m_globalHealthIdentityEpoch = m_mqttIdentityEpoch;
+  m_globalHealthReceiver = m_currentRobotId;
+  m_globalHealthReceived = true;
+  m_globalHealthMqttVerified = false;
+  m_globalHealthFields.clear();
+  const QList<int> roster = allyRoster + enemyRoster;
+  for (int i = 0; i < roster.size(); ++i) {
+    QVariantMap observation{{"state", i < data.robot_health_size() ? "valid" : "unreported"}};
+    if (i < data.robot_health_size()) {
+      const quint32 value = data.robot_health(i);
+      observation["value"] = QVariant::fromValue(value);
+      if (value > 65535) observation["legacyProjection"] = QStringLiteral("out_of_range");
+      m_globalHealthAccepted[QString::number(roster.at(i))] = QVariant::fromValue(value);
+      m_globalHealthAcceptedSource[QString::number(roster.at(i))] = QStringLiteral("protocol_unverified");
+    }
+    m_globalHealthFields[QString::number(roster.at(i))] = observation;
+  }
+  emit globalHealthObservationChanged();
   const bool hasEnemySnapshot = data.robot_health_size() > 4 ||
       data.enemy_base_health() > 0 || data.enemy_outpost_health() > 0 ||
       data.enemy_base_status() > 0 || data.enemy_outpost_status() > 0 ||
@@ -2585,6 +2649,7 @@ void GameData::updateGlobalUnitStatus(const robomaster::GlobalUnitStatus &data) 
       return 0;
     }
 
+    if (data.robot_health(topicIndex) > 65535) return -1;
     const quint16 globalHp =
         static_cast<quint16>(data.robot_health(topicIndex));
     const quint16 prevHP = robot->currentHP;
@@ -2611,31 +2676,34 @@ void GameData::updateGlobalUnitStatus(const robomaster::GlobalUnitStatus &data) 
     return globalHp;
   };
 
+  bool allyRepresentable = true, enemyRepresentable = true;
   int allyTotalHp = 0;
   const int allyRobotCount =
       std::min(data.robot_health_size(), static_cast<int>(allyRoster.size()));
   for (int i = 0; i < allyRobotCount; ++i) {
-    allyTotalHp += applyRobotSnapshot(i, allyRoster.at(i));
+    const int hp = applyRobotSnapshot(i, allyRoster.at(i));
+    if (hp < 0) allyRepresentable = false; else allyTotalHp += hp;
   }
 
   int enemyTotalHp = 0;
   for (int i = 0; hasEnemySnapshot && i < enemyRoster.size(); ++i) {
-    enemyTotalHp += applyRobotSnapshot(i + allyRoster.size(), enemyRoster.at(i));
+    const int hp = applyRobotSnapshot(i + allyRoster.size(), enemyRoster.at(i));
+    if (hp < 0) enemyRepresentable = false; else enemyTotalHp += hp;
   }
 
   if (isBluePerspective) {
-    if (data.robot_health_size() >= 4) m_blueRobotTotalHP = allyTotalHp;
+    if (data.robot_health_size() >= 4 && allyRepresentable) m_blueRobotTotalHP = allyTotalHp;
     if (hasEnemySnapshot) {
-      if (data.robot_health_size() >= 8) m_redRobotTotalHP = enemyTotalHp;
+      if (data.robot_health_size() >= 8 && enemyRepresentable) m_redRobotTotalHP = enemyTotalHp;
     }
     m_blueTeamStats.totalDamageDealt = data.total_damage_ally();
     if (hasEnemySnapshot || data.total_damage_enemy() > 0) {
       m_redTeamStats.totalDamageDealt = data.total_damage_enemy();
     }
   } else {
-    if (data.robot_health_size() >= 4) m_redRobotTotalHP = allyTotalHp;
+    if (data.robot_health_size() >= 4 && allyRepresentable) m_redRobotTotalHP = allyTotalHp;
     if (hasEnemySnapshot) {
-      if (data.robot_health_size() >= 8) m_blueRobotTotalHP = enemyTotalHp;
+      if (data.robot_health_size() >= 8 && enemyRepresentable) m_blueRobotTotalHP = enemyTotalHp;
     }
     m_redTeamStats.totalDamageDealt = data.total_damage_ally();
     if (hasEnemySnapshot || data.total_damage_enemy() > 0) {
@@ -4371,6 +4439,7 @@ void GameData::setRobotHeat(quint8 id, quint16 heat) {
   RobotData *robot = findRobotById(id);
   if (robot) {
     robot->currentHeat = heat;
+    recordLocalHeatObservation(id, heat, QStringLiteral("local_input"));
     m_lastLocalHeatSet = QDateTime::currentDateTime();
     emit robotDataUpdated(id);
     if (id == m_currentRobotId) {

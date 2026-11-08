@@ -353,8 +353,8 @@ int MqttManager::messageArrivedCallback(void *context, char *topicName,
   QMetaObject::invokeMethod(
       self,
       [self, topic, payload, payloadSha1, receivedMs, monotonicMs, observeMessage, generation, identityGeneration]() {
-        if ((topic == QLatin1String("RobotModuleStatus") || topic == QLatin1String("RobotDynamicStatus") || topic == QLatin1String("RobotStaticStatus") || topic == QLatin1String("GameStatus") || topic == QLatin1String("Event")) && generation != self->m_connectionGeneration.load()) return;
-        if ((topic == QLatin1String("RobotModuleStatus") || topic == QLatin1String("RobotDynamicStatus")) &&
+        if ((topic == QLatin1String("RobotModuleStatus") || topic == QLatin1String("RobotDynamicStatus") || topic == QLatin1String("RobotStaticStatus") || topic == QLatin1String("GlobalUnitStatus") || topic == QLatin1String("GameStatus") || topic == QLatin1String("Event")) && generation != self->m_connectionGeneration.load()) return;
+        if ((topic == QLatin1String("RobotModuleStatus") || topic == QLatin1String("RobotDynamicStatus") || topic == QLatin1String("GlobalUnitStatus")) &&
             identityGeneration != self->m_identityGeneration.load()) return;
         if (observeMessage) {
           emit self->messageObserved(topic, payload.size(), payloadSha1,

@@ -1205,6 +1205,7 @@ void MainWindow::setupConnections() {
     m_videoConnectionTimer->setSingleShot(true);
     m_videoConnectionTimer->setInterval(1500);
     connect(m_videoConnectionTimer, &QTimer::timeout, this, [this]() {
+      if (m_gameData) m_gameData->setVideoReceptionState(0);
       if (m_qmlSettingsPanel && m_qmlSettingsPanel->rootObject()) {
         m_qmlSettingsPanel->rootObject()->setProperty("isVideoConnected",
                                                       false);
@@ -1221,6 +1222,7 @@ void MainWindow::setupConnections() {
     connect(m_videoBackground->getVideoReceiver(),
             &VideoReceiver::hevcDataReady, this,
             [this](quint16, const QByteArray &data) {
+              if (!data.isEmpty() && m_gameData) m_gameData->setVideoReceptionState(1);
               if (!data.isEmpty() && m_qmlSettingsPanel &&
                   m_qmlSettingsPanel->rootObject()) {
                 m_qmlSettingsPanel->rootObject()->setProperty(
@@ -1252,6 +1254,7 @@ void MainWindow::setupConnections() {
   if (m_videoBackground) {
     connect(m_videoBackground, &VideoBackgroundWidget::frameUpdated, this,
             [this](const QImage &frame) {
+              if (!frame.isNull() && m_gameData) m_gameData->setVideoReceptionState(1);
               if (!frame.isNull() && m_qmlSettingsPanel &&
                   m_qmlSettingsPanel->rootObject()) {
                 m_qmlSettingsPanel->rootObject()->setProperty(
@@ -7225,6 +7228,7 @@ void MainWindow::keyPressEvent(QKeyEvent *event) {
                 int newHeat = std::max(0, (int)robot->currentHeat - drop);
 
                 m_gameData->setRobotHeat(i, static_cast<quint16>(newHeat));
+                m_gameData->recordLocalHeatObservation(i, newHeat, QStringLiteral("debug_test"));
               }
 
               // 2. 模拟裁判系统自动解锁，仅在热量降为 0 后解除。
@@ -7297,6 +7301,7 @@ void MainWindow::keyPressEvent(QKeyEvent *event) {
             robot->shooterLocked = initLocked;
 
             m_gameData->setRobotHeat(i, targetH);
+            m_gameData->recordLocalHeatObservation(i, targetH, QStringLiteral("debug_test"));
 
             // setRobotHeat 只处理热量；手动修改锁定状态后需额外通知界面。
             emit m_gameData->robotDataUpdated(i);
@@ -8161,6 +8166,7 @@ void MainWindow::onSimulatorDataReceived(PacketType type,
       // 通过现有细粒度接口更新 GameData。
       m_gameData->updateRobotHealth(id, robot.currentHP);
       m_gameData->setRobotHeat(id, robot.currentHeat);
+      m_gameData->recordLocalHeatObservation(id, robot.currentHeat, QStringLiteral("simulator"));
       m_gameData->updateRobotPower(id, robot.power);
       // bufferEnergy 暂无对应的公开更新接口，本路径暂不写入。
     }

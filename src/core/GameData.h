@@ -701,6 +701,9 @@ Q_PROPERTY(QVariantMap robotRespawnStatus READ robotRespawnStatus NOTIFY robotRe
   Q_PROPERTY(QVariantMap robotDynamicStatus READ robotDynamicStatus NOTIFY robotDynamicStatusChanged)
   Q_PROPERTY(QVariantMap gameStatusObservation READ gameStatusObservation NOTIFY gameStatusObservationChanged)
   Q_PROPERTY(QVariantMap mqttReceptionMetadata READ mqttReceptionMetadata NOTIFY mqttReceptionMetadataChanged)
+  Q_PROPERTY(QVariantMap globalHealthObservation READ globalHealthObservation NOTIFY globalHealthObservationChanged)
+  Q_PROPERTY(QVariantMap localHeatObservation READ localHeatObservation NOTIFY localHeatObservationChanged)
+  Q_PROPERTY(int videoReceptionState READ videoReceptionState NOTIFY videoReceptionStateChanged)
 
   // Observation of Event 16 only; this is not the current installation state.
   Q_PROPERTY(QVariantMap lastEventObservation READ lastEventObservation NOTIFY lastEventObservationChanged)
@@ -722,6 +725,13 @@ public:
   ~GameData();
 
   QVariantMap mqttReceptionMetadata() const;
+  QVariantMap globalHealthObservation() const;
+  QVariantMap localHeatObservation() const { return m_localHeatObservation; }
+  int videoReceptionState() const { return m_videoReceptionState; }
+  void setVideoReceptionState(int state);
+  void recordLocalHeatObservation(int identity, float value, const QString &source);
+  Q_INVOKABLE QVariantMap refereeRobotObservation(int identity) const;
+  Q_INVOKABLE QVariantMap legacyGameProjection() const;
   void setMqttSessionState(bool connected, const QString &clientId);
   void recordMqttObservation(const QString &topic, int identity, qint64 receivedMs, qint64 monotonicMs);
   QVariantMap robotModuleStatus() const;
@@ -1396,6 +1406,9 @@ signals:
   void techCoreMotionStateSyncUpdated();
   void currentRobotIdentityChanged();
   void mqttReceptionMetadataChanged();
+  void globalHealthObservationChanged();
+  void localHeatObservationChanged();
+  void videoReceptionStateChanged();
   void gameStatusObservationChanged();
   void lastEventObservationChanged();
   void event16ReceivedChanged();
@@ -1508,6 +1521,16 @@ private:
 
   // 0x0101 场地事件数据缓存
   quint32 m_eventData = 0;
+  bool m_globalHealthReceived = false;
+  bool m_globalHealthMqttVerified = false;
+  int m_globalHealthReceiver = 0;
+  quint64 m_globalHealthIdentityEpoch = 0;
+  QVariantMap m_globalHealthFields;
+  QVariantMap m_globalHealthAccepted;
+  QVariantMap m_globalHealthAcceptedSource;
+  QVariantMap m_localHeatObservation;
+  QHash<int, QVariantMap> m_refereeRobotObservations;
+  int m_videoReceptionState = -1;
   bool m_mqttSessionConnected = false;
   quint64 m_mqttSession = 0;
   quint64 m_mqttIdentityEpoch = 0;

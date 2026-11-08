@@ -28,6 +28,7 @@ void captureDynamicCallback(QtMsgType, const QMessageLogContext &, const QString
   if (message.contains("RM26_MQTT_RX_TIMING direction=rx topic=RobotStaticStatus")) observedQueuedTopics.fetch_or(4);
   if (message.contains("RM26_MQTT_RX_TIMING direction=rx topic=Event")) observedQueuedTopics.fetch_or(8);
   if (message.contains("RM26_MQTT_RX_TIMING direction=rx topic=RobotModuleStatus")) observedQueuedTopics.fetch_or(16);
+  if (message.contains("RM26_MQTT_RX_TIMING direction=rx topic=GlobalUnitStatus")) observedQueuedTopics.fetch_or(32);
 }
 QStringList detailedLogs;
 void captureDetails(QtMsgType type, const QMessageLogContext &, const QString &message) {
@@ -276,6 +277,14 @@ private slots:
     QVERIFY(publisher.publish("RobotStaticStatus", bytes(ss), 1));
     QTRY_VERIFY_WITH_TIMEOUT(metadata().value("staticByRobot").toMap().contains("101"), 5000);
     QCOMPARE(data.getRobotById(1)->maxHP, 300); QCOMPARE(data.getRobotById(101)->maxHP, 400);
+    robomaster::GlobalUnitStatus global; global.add_robot_health(111);
+    QVERIFY(publisher.publish("GlobalUnitStatus", bytes(global), 1));
+    QTRY_COMPARE_WITH_TIMEOUT(topicMeta("GlobalUnitStatus").value("sessionState").toString(), QString("current"), 5000);
+    QCOMPARE(data.globalHealthObservation().value("accepted").toMap().value("1").toUInt(), 111u);
+    QCOMPARE(data.globalHealthObservation().value("source").toString(), QString("official_mqtt"));
+    QCOMPARE(data.globalHealthObservation().value("acceptedSource").toMap().value("1").toString(), QString("official_mqtt"));
+    QCOMPARE(topicMeta("GlobalUnitStatus").value("identity").toInt(), 1);
+    QVERIFY(topicMeta("GlobalUnitStatus").value("fieldUpdates").toMap().value("1").toMap().value("receivedAt").toDateTime().isValid());
     robomaster::Event event; event.set_event_id(16);
     QVERIFY(publisher.publish("Event", bytes(event), 1));
     QTRY_COMPARE_WITH_TIMEOUT(topicMeta("Event16").value("sessionState").toString(), QString("current"), 5000);
@@ -288,17 +297,20 @@ private slots:
     data.setCurrentRobotId(1);
     QCOMPARE(topicMeta("RobotDynamicStatus").value("sessionState").toString(), QString("identity_changed"));
     // Returning to the same identity must not revalidate a message queued before the switch.
-    dynamicCallbackObserved.store(false);
+    dynamicCallbackObserved.store(false); observedQueuedTopics.store(0);
     const auto identityHandler = qInstallMessageHandler(captureDynamicCallback);
     msg.set_current_heat(55.5f);
     const bool identitySent = publisher.publish("RobotDynamicStatus", bytes(msg), 1);
-    for (int i = 0; i < 100 && !dynamicCallbackObserved.load(); ++i) QThread::msleep(10);
-    const bool identitySeen = dynamicCallbackObserved.load();
+    global.Clear(); global.add_robot_health(999); publisher.publish("GlobalUnitStatus", bytes(global), 1);
+    for (int i = 0; i < 100 && (observedQueuedTopics.load() & 33) != 33; ++i) QThread::msleep(10);
+    const bool identitySeen = (observedQueuedTopics.load() & 33) == 33;
     data.setCurrentRobotId(101); data.setCurrentRobotId(1);
     QCoreApplication::processEvents();
     qInstallMessageHandler(identityHandler);
     QVERIFY(identitySent); QVERIFY(identitySeen);
     QVERIFY(!data.robotDynamicStatus().value("received").toBool());
+    QCOMPARE(data.globalHealthObservation().value("accepted").toMap().value("1").toUInt(), 111u);
+    QCOMPARE(topicMeta("GlobalUnitStatus").value("sessionState").toString(), QString("identity_changed"));
     QCOMPARE(topicMeta("RobotDynamicStatus").value("sessionState").toString(), QString("identity_changed"));
     // Ensure a callback has queued the old message while the Qt thread remains blocked.
     dynamicCallbackObserved.store(false); observedQueuedTopics.store(0);
@@ -310,8 +322,9 @@ private slots:
     event.set_event_id(16); publisher.publish("Event", bytes(event), 1);
     robomaster::RobotModuleStatus queuedModule; queuedModule.set_modular_42mm(1);
     publisher.publish("RobotModuleStatus", bytes(queuedModule), 1);
-    for (int i = 0; i < 200 && observedQueuedTopics.load() != 31; ++i) QThread::msleep(10);
-    const bool callbackSeen = dynamicCallbackObserved.load() && observedQueuedTopics.load() == 31;
+    publisher.publish("GlobalUnitStatus", bytes(global), 1);
+    for (int i = 0; i < 200 && observedQueuedTopics.load() != 63; ++i) QThread::msleep(10);
+    const bool callbackSeen = dynamicCallbackObserved.load() && observedQueuedTopics.load() == 63;
     network.stopMqtt();
     data.setCurrentRobotId(101);
     QCoreApplication::processEvents();
@@ -326,6 +339,12 @@ private slots:
     QTRY_VERIFY_WITH_TIMEOUT(!connected.isEmpty(), 5000); QVERIFY(network.isMqttConnected());
     QVERIFY(metadata().value("session").toULongLong() > session1);
     QCOMPARE(topicMeta("GameStatus").value("sessionState").toString(), QString("historical"));
+    QCOMPARE(topicMeta("GlobalUnitStatus").value("sessionState").toString(), QString("historical"));
+    global.Clear(); global.add_robot_health(212);
+    QVERIFY(publisher.publish("GlobalUnitStatus", bytes(global), 1));
+    QTRY_COMPARE_WITH_TIMEOUT(data.globalHealthObservation().value("receiverId").toInt(), 101, 5000);
+    QCOMPARE(data.globalHealthObservation().value("fields").toMap().value("101").toMap().value("value").toUInt(), 212u);
+    QCOMPARE(topicMeta("GlobalUnitStatus").value("sessionState").toString(), QString("current"));
     QCOMPARE(topicMeta("Event16").value("sessionState").toString(), QString("historical"));
     QCOMPARE(topicMeta("RobotDynamicStatus").value("sessionState").toString(), QString("historical"));
     msg.set_current_heat(22.25f); msg.set_remaining_ammo(7);
@@ -351,6 +370,7 @@ private slots:
     QTRY_VERIFY_WITH_TIMEOUT(!network.isMqttConnected(), 5000);
     QTRY_VERIFY_WITH_TIMEOUT(data.robotDynamicStatus().value("received").toBool(), 5000);
     QTRY_COMPARE_WITH_TIMEOUT(topicMeta("RobotDynamicStatus").value("sessionState").toString(), QString("disconnected"), 5000);
+    QCOMPARE(topicMeta("GlobalUnitStatus").value("sessionState").toString(), QString("disconnected"));
     QCOMPARE(data.robotDynamicStatus().value("accepted").toMap().value("current_heat").toFloat(), 23.5f);
     network.stopMqtt(); publisher.disconnect();
   }
@@ -579,6 +599,75 @@ private slots:
     for (const QString &topic : {QString("GlobalUnitStatus"), QString("RobotStaticStatus"), QString("RobotDynamicStatus")})
       QCOMPARE(OfficialMessageHandler::handle(topic, invalid, data, logger), OfficialMessageHandler::Result::ParseFailed);
     QCOMPARE(data.redBaseHealth(), 3210); QCOMPARE(data.getRobotById(3)->currentHP, 345); QCOMPARE(logs, 3);
+  }
+  void globalSourcesAndDeveloperPanel() {
+    Q_INIT_RESOURCE(qml);
+    GameData data; data.setCurrentRobotId(1);
+    QQuickWidget panel; panel.rootContext()->setContextProperty("gameData", &data);
+    panel.setSource(QUrl(QStringLiteral("qrc:/qml/RM27DevPanel.qml")));
+    QCOMPARE(panel.status(), QQuickWidget::Ready);
+    auto *health = panel.rootObject()->findChild<QObject *>("rm27HealthSources");
+    auto *heat = panel.rootObject()->findChild<QObject *>("rm27HeatSources");
+    auto *projection = panel.rootObject()->findChild<QObject *>("rm27GameProjection");
+    auto *connection = panel.rootObject()->findChild<QObject *>("rm27ConnectionSources");
+    QVERIFY(health); QVERIFY(heat); QVERIFY(projection); QVERIFY(connection);
+    QVERIFY(connection->property("text").toString().contains(QStringLiteral("实体控制器连接: 未知")));
+    QVERIFY(connection->property("text").toString().contains(QStringLiteral("视频接收: 未知")));
+    data.setVideoReceptionState(1);
+    QVERIFY(connection->property("text").toString().contains(QStringLiteral("近期收到帧")));
+    robomaster::RobotStaticStatus stat; stat.set_robot_id(1); stat.set_connection_state(1); stat.set_alive_state(1);
+    data.updateRobotStaticStatus(stat);
+    QTRY_VERIFY(connection->property("text").toString().contains(QStringLiteral("裁判机器人连接: 已连接")));
+    robomaster::RobotDynamicStatus dyn; dyn.set_current_health(101); dyn.set_current_heat(12.75);
+    data.updateRobotDynamicStatus(dyn);
+    robomaster::GlobalUnitStatus global; global.add_robot_health(120); global.add_robot_health(30);
+    data.updateGlobalUnitStatus(global);
+    QCOMPARE(data.globalHealthObservation().value("fields").toMap().value("1").toMap().value("value").toUInt(), 120u);
+    QCOMPARE(data.globalHealthObservation().value("acceptedSource").toMap().value("1").toString(), QString("protocol_unverified"));
+    QCOMPARE(data.robotDynamicStatus().value("accepted").toMap().value("current_health").toUInt(), 101u);
+    QTRY_VERIFY(health->property("text").toString().contains(QStringLiteral("Global 血量: 120")));
+    QVERIFY(health->property("text").toString().contains(QStringLiteral("Dynamic 血量: 101")));
+    QCOMPARE(data.getRobotById(1)->currentHP, 120);
+    dyn.set_current_health(90); data.updateRobotDynamicStatus(dyn);
+    QCOMPARE(data.getRobotById(1)->currentHP, 90);
+    QCOMPARE(data.globalHealthObservation().value("accepted").toMap().value("1").toUInt(), 120u);
+    global.Clear(); global.add_robot_health(0); data.updateGlobalUnitStatus(global);
+    QCOMPARE(data.getRobotById(1)->currentHP, 0);
+    QCOMPARE(data.globalHealthObservation().value("fields").toMap().value("3").toMap().value("state").toString(), QString("unreported"));
+    QCOMPARE(data.globalHealthObservation().value("accepted").toMap().value("3").toUInt(), 30u);
+    dyn.set_current_health(100); data.updateRobotDynamicStatus(dyn);
+    auto previousStatus = data.getRobotById(1)->status;
+    global.Clear(); global.add_robot_health(65536); data.updateGlobalUnitStatus(global);
+    QCOMPARE(data.getRobotById(1)->currentHP, 100);
+    QCOMPARE(data.getRobotById(1)->status, previousStatus);
+    QCOMPARE(data.globalHealthObservation().value("fields").toMap().value("1").toMap().value("legacyProjection").toString(), QString("out_of_range"));
+    QCOMPARE(data.globalHealthObservation().value("accepted").toMap().value("1").toUInt(), 65536u);
+    data.setCurrentRobotId(101); global.Clear(); global.add_robot_health(210); global.add_robot_health(211); data.updateGlobalUnitStatus(global);
+    QCOMPARE(data.globalHealthObservation().value("receiverId").toInt(), 101);
+    QCOMPARE(data.globalHealthObservation().value("fields").toMap().value("101").toMap().value("value").toUInt(), 210u);
+    QCOMPARE(data.getRobotById(103)->currentHP, 211);
+    data.setCurrentRobotId(1); QVERIFY(!data.globalHealthObservation().value("identityMatches").toBool());
+    QTRY_VERIFY(health->property("text").toString().contains(QStringLiteral("旧身份观测")));
+    data.setRobotHeat(1, 40); data.recordLocalHeatObservation(1, 40, "debug_test");
+    dyn.Clear(); dyn.set_current_heat(12.75); data.updateRobotDynamicStatus(dyn);
+    QCOMPARE(data.getRobotById(1)->currentHeat, 40.0f); // Existing 1.5 s protection remains.
+    QCOMPARE(data.robotDynamicStatus().value("accepted").toMap().value("current_heat").toFloat(), 12.75f);
+    QTRY_VERIFY(heat->property("text").toString().contains(QStringLiteral("debug_test")));
+    robomaster::GameStatus game; game.set_current_stage(4); game.set_stage_countdown_sec(200); data.updateGameStatus(game);
+    data.updateGameStateFromS1(4, 190, 0, 0, 1, false);
+    QCOMPARE(data.gameStatusObservation().value("accepted").toMap().value("stage_countdown_sec").toInt(), 200);
+    QTRY_VERIFY(projection->property("text").toString().contains(QStringLiteral("剩余 190（不同）")));
+  }
+  void globalLastValueKeepsOwnSource() {
+    GameData data; data.setMqttSessionState(true, "1");
+    robomaster::GlobalUnitStatus global; global.add_robot_health(100);
+    data.updateGlobalUnitStatus(global); data.recordMqttObservation("GlobalUnitStatus", 1, 100000, 1000);
+    QCOMPARE(data.globalHealthObservation().value("acceptedSource").toMap().value("1").toString(), QString("official_mqtt"));
+    global.Clear(); global.add_robot_health(110); data.updateGlobalUnitStatus(global);
+    QCOMPARE(data.globalHealthObservation().value("acceptedSource").toMap().value("1").toString(), QString("protocol_unverified"));
+    global.Clear(); data.updateGlobalUnitStatus(global); data.recordMqttObservation("GlobalUnitStatus", 1, 200000, 2000);
+    QCOMPARE(data.globalHealthObservation().value("accepted").toMap().value("1").toUInt(), 110u);
+    QCOMPARE(data.globalHealthObservation().value("acceptedSource").toMap().value("1").toString(), QString("protocol_unverified"));
   }
   void mqttObservationMetadata() {
     Q_INIT_RESOURCE(qml);
@@ -908,7 +997,7 @@ private slots:
     QSignalSpy received(&network, &RM::NetworkManager::dataReceived);
     const QString uri = QStringLiteral("tcp://127.0.0.1:%1").arg(port);
     QSignalSpy connected(&network, &RM::NetworkManager::mqttConnectCompleted);
-    network.startMqtt(uri, QStringLiteral("rm-taskb1-subscriber"));
+    network.startMqtt(uri, QStringLiteral("1"));
     QTRY_VERIFY_WITH_TIMEOUT(!connected.isEmpty(), 5000);
     QVERIFY(network.isMqttConnected());
     MqttManager publisher;
@@ -932,6 +1021,8 @@ private slots:
     QTest::qWait(100);
     QCOMPARE(observed.count(), 1); QCOMPARE(received.count(), 3);
     data.setMyRobotId(101);
+    network.stopMqtt(); connected.clear(); network.startMqtt(uri, QStringLiteral("101"));
+    QTRY_VERIFY_WITH_TIMEOUT(!connected.isEmpty(), 5000); QVERIFY(network.isMqttConnected());
     robomaster::RobotStaticStatus invalidIdentity;
     invalidIdentity.set_robot_id(257);
     invalidIdentity.set_robot_type(8);

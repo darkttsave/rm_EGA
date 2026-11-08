@@ -10,6 +10,48 @@ Rectangle {
     property int revision: 0
     property var dataSource: gameData
 
+    component SourceCard: Rectangle {
+        id: card
+        property string title: ""
+        default property alias content: cardBody.data
+        width: parent.width
+        height: cardLayout.implicitHeight + 28
+        radius: 8
+        color: "#172632"
+        border.color: "#2b4453"
+        Column {
+            id: cardLayout
+            x: 16; y: 14
+            width: parent.width - 32
+            spacing: 8
+            Text { text: card.title; color: "#8de0ff"; font.pixelSize: 17; font.bold: true }
+            Column { id: cardBody; width: parent.width; spacing: 6 }
+        }
+    }
+
+    component SourceRow: Item {
+        id: row
+        property string primary: ""
+        property string detail: ""
+        property bool sideBySide: width >= 680
+        width: parent.width
+        height: Math.max(primaryText.height, sideBySide ? detailText.height : 0) +
+                (!sideBySide && detail.length ? detailText.height + 2 : 0)
+        Text {
+            id: primaryText
+            width: row.sideBySide ? row.width * 0.48 : row.width
+            text: row.primary; color: "white"; font.pixelSize: 18; wrapMode: Text.Wrap
+        }
+        Text {
+            id: detailText
+            x: row.sideBySide ? row.width * 0.5 : 0
+            y: row.sideBySide ? 0 : primaryText.height + 2
+            width: row.sideBySide ? row.width * 0.5 : row.width
+            visible: row.detail.length > 0
+            text: row.detail; color: "#a8c4d8"; font.pixelSize: 16; wrapMode: Text.Wrap
+        }
+    }
+
     // Re-read GameData, including updates that do not carry a dedicated QML notify.
     Timer { interval: 250; running: root.panelActive; repeat: true; onTriggered: root.revision++ }
     Connections {
@@ -38,7 +80,7 @@ Rectangle {
                       "\n时间为本机接收时间；当前会话不代表实时有效。"
             }
             Repeater {
-                model: ["GameStatus", "RobotDynamicStatus", "RobotStaticStatus", "RobotModuleStatus", "Event16"]
+                model: ["GameStatus", "GlobalUnitStatus", "RobotDynamicStatus", "RobotStaticStatus", "RobotModuleStatus", "Event16"]
                 delegate: Text {
                     required property string modelData
                     property var meta: { root.revision; return root.dataSource ? root.dataSource.mqttReceptionMetadata : ({}) }
@@ -50,6 +92,111 @@ Rectangle {
                           (state === "current" ? "当前会话观测" : state === "disconnected" ? "断连前历史观测" : state === "identity_changed" ? "旧身份历史观测" : "历史会话观测") +
                           "    本机接收: " + Qt.formatDateTime(record.receivedAt, "yyyy-MM-dd HH:mm:ss.zzz") +
                           "    距接收: " + Math.floor(record.ageMs / 1000) + " 秒    会话: " + record.session + (record.identity ? "    机器人 ID: " + record.identity : "（全局或身份未确定）"))
+                }
+            }
+            Text { text: "来源对照（不决定业务优先级）"; color: "#8de0ff"; font.pixelSize: 21 }
+            SourceCard {
+                title: "血量 · 当前机器人"
+                Column {
+                    id: healthSources
+                    objectName: "rm27HealthSources"
+                    width: parent.width; spacing: 6
+                    property var global: root.dataSource ? root.dataSource.globalHealthObservation : ({})
+                    property var dynamic: root.dataSource ? root.dataSource.robotDynamicStatus : ({})
+                    property var meta: root.dataSource ? root.dataSource.mqttReceptionMetadata : ({})
+                    property string robotId: String(root.dataSource ? root.dataSource.currentRobotId : 0)
+                    property var gf: (global.fields || ({}))[robotId]
+                    property var globalLast: (global.accepted || ({}))[robotId]
+                    property var df: (dynamic.fields || ({})).current_health
+                    property var gr: global.source === "official_mqtt" ? ((meta.topics || ({})).GlobalUnitStatus || ({})) : ({})
+                    property var dr: (meta.topics || ({})).RobotDynamicStatus || ({})
+                    property string text: healthGlobal.primary + " " + healthDynamic.primary
+                    function currentField(field) { return !field || field.state === "unreported" ? "未上报" : field.state !== "valid" ? "非法" : String(field.value) + (field.legacyProjection ? "（超出旧类型范围）" : "") }
+                    function stamp(record, key, source) {
+                        if (source && source !== "official_mqtt") return "接收来源未确认"
+                        let entry = (record.fieldUpdates || ({}))[key]
+                        return entry ? "本机接收 " + Qt.formatDateTime(entry.receivedAt, "HH:mm:ss.zzz") + " · 会话 " + entry.session : "接收来源未确认"
+                    }
+                    SourceRow { primary: "机器人 ID " + healthSources.robotId }
+                    SourceRow {
+                        id: healthGlobal
+                        primary: "Global 血量: " + healthSources.currentField(healthSources.gf) + ((!healthSources.gf || healthSources.gf.state === "unreported") && healthSources.globalLast !== undefined ? "（上次: " + healthSources.globalLast + "）" : "") + (healthSources.global.received && !healthSources.global.identityMatches ? "（旧身份观测）" : "")
+                        detail: "来源: " + (healthSources.global.source || "未收到") + " · " + (healthSources.gr.sessionState || "never") + " · " + healthSources.stamp(healthSources.gr, healthSources.robotId, (healthSources.global.acceptedSource || ({}))[healthSources.robotId])
+                    }
+                    SourceRow {
+                        id: healthDynamic
+                        primary: "Dynamic 血量: " + healthSources.currentField(healthSources.df)
+                        detail: (healthSources.dr.sessionState || "never") + " · " + healthSources.stamp(healthSources.dr, "current_health")
+                    }
+                }
+            }
+            SourceCard {
+                title: "热量"
+                Column {
+                    id: heatSources
+                    objectName: "rm27HeatSources"
+                    width: parent.width; spacing: 6
+                    property var robot: { root.revision; return root.dataSource ? root.dataSource.getRobotInfo(root.dataSource.currentRobotId) : ({}) }
+                    property var dynamic: root.dataSource ? root.dataSource.robotDynamicStatus : ({})
+                    property var local: root.dataSource ? root.dataSource.localHeatObservation : ({})
+                    property var field: (dynamic.fields || ({})).current_heat
+                    property var receipt: root.dataSource ? ((root.dataSource.mqttReceptionMetadata.topics || ({})).RobotDynamicStatus || ({})) : ({})
+                    property string text: localHeat.primary + " " + localHeat.detail
+                    SourceRow {
+                        primary: "Dynamic 官方热量: " + (!heatSources.field || heatSources.field.state === "unreported" ? "未上报" : heatSources.field.state !== "valid" ? "非法" : String(heatSources.field.value))
+                        detail: "会话: " + (heatSources.receipt.sessionState || "never")
+                    }
+                    SourceRow {
+                        primary: "旧兼容热量: " + (heatSources.robot.currentHeat === undefined ? "未知" : heatSources.robot.currentHeat)
+                        detail: "来源可能混合"
+                    }
+                    SourceRow {
+                        id: localHeat
+                        property bool matches: heatSources.local.robotId === (root.dataSource ? root.dataSource.currentRobotId : 0)
+                        primary: "最近本地输入: " + (matches ? heatSources.local.value : "无当前身份记录")
+                        detail: matches ? "来源: " + heatSources.local.source : ""
+                    }
+                }
+            }
+            SourceCard {
+                title: "连接状态"
+                Column {
+                    id: connectionSources
+                    objectName: "rm27ConnectionSources"
+                    width: parent.width; spacing: 6
+                    property var meta: root.dataSource ? root.dataSource.mqttReceptionMetadata : ({})
+                    property var referee: { root.revision; return root.dataSource ? root.dataSource.refereeRobotObservation(root.dataSource.currentRobotId) : ({}) }
+                    property var staticReceipt: (meta.staticByRobot || ({}))[String(meta.configuredIdentity)] || ({})
+                    property int video: root.dataSource ? root.dataSource.videoReceptionState : -1
+                    property string text: refereeConnection.primary + " " + videoConnection.primary + " " + controllerConnection.primary
+                    function val(v, labels) { return v === undefined ? "未上报" : v < labels.length ? labels[v] + " (" + v + ")" : "未识别 (" + v + ")" }
+                    SourceRow { primary: "MQTT: " + (connectionSources.meta.connected ? "已连接" : "未连接") }
+                    SourceRow {
+                        id: refereeConnection
+                        primary: "裁判机器人连接: " + connectionSources.val(connectionSources.referee.connection_state, ["未连接", "已连接"])
+                        detail: "来源: " + (connectionSources.referee.source || "未收到") + " · " + (connectionSources.referee.source === "official_mqtt" ? (connectionSources.staticReceipt.sessionState || "never") : "来源未确认")
+                    }
+                    SourceRow { primary: "上场: " + connectionSources.val(connectionSources.referee.field_state, ["已上场", "未上场"]) + "    存活: " + connectionSources.val(connectionSources.referee.alive_state, ["未知", "存活", "战亡"]) }
+                    SourceRow { id: videoConnection; primary: "视频接收: " + (connectionSources.video === 1 ? "近期收到帧" : connectionSources.video === 0 ? "帧接收超时" : "未知") }
+                    SourceRow { id: controllerConnection; primary: "实体控制器连接: 未知"; detail: "无独立可靠来源" }
+                }
+            }
+            SourceCard {
+                title: "比赛状态对照"
+                Column {
+                    id: gameProjection
+                    objectName: "rm27GameProjection"
+                    width: parent.width; spacing: 6
+                    property var old: { root.revision; return root.dataSource ? root.dataSource.legacyGameProjection() : ({}) }
+                    property var official: root.dataSource ? root.dataSource.gameStatusObservation : ({})
+                    property var meta: root.dataSource ? ((root.dataSource.mqttReceptionMetadata.topics || ({})).GameStatus || ({})) : ({})
+                    property string text: stageProjection.primary + " " + countdownProjection.primary
+                    function diff(key) { let v = (official.fields || ({}))[key]; return !v || v.state !== "valid" ? "未确认" : v.value === old[key] ? "一致" : "不同" }
+                    SourceRow { primary: "GameStatus 官方会话: " + (gameProjection.meta.sessionState || "never") }
+                    SourceRow { id: stageProjection; primary: "旧兼容阶段 " + gameProjection.old.current_stage + "（" + gameProjection.diff("current_stage") + "）" }
+                    SourceRow { id: countdownProjection; primary: "剩余 " + gameProjection.old.stage_countdown_sec + "（" + gameProjection.diff("stage_countdown_sec") + "）" }
+                    SourceRow { primary: "旧兼容比分 " + gameProjection.old.red_score + ":" + gameProjection.old.blue_score + "（红 " + gameProjection.diff("red_score") + " / 蓝 " + gameProjection.diff("blue_score") + "）" }
+                    SourceRow { primary: "暂停 " + gameProjection.old.is_paused + "（" + gameProjection.diff("is_paused") + "）"; detail: "差异只表示数值对照，不代表实时性或来源权威。" }
                 }
             }
             Text { text: "全局比赛状态（官方 GameStatus 观测）"; color: "#8de0ff"; font.pixelSize: 21 }

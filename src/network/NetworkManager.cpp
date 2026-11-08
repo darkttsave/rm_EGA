@@ -1241,7 +1241,7 @@ void NetworkManager::processMqttMessage(const QString &topic,
   }
   dumpMqttEvent(QStringLiteral("received"), topic, payload, m_gameData);
 
-  if ((topic == QLatin1String("RobotModuleStatus") || topic == QLatin1String("RobotDynamicStatus")) && m_mqttManager &&
+  if ((topic == QLatin1String("RobotModuleStatus") || topic == QLatin1String("RobotDynamicStatus") || topic == QLatin1String("GlobalUnitStatus")) && m_mqttManager &&
       (!m_mqttManager->isConnected() || m_mqttManager->clientId() != QString::number(m_gameData->getCurrentRobotId()))) {
     qWarning() << topic << "ignored: MQTT identity does not match current robot";
     return;
@@ -1276,7 +1276,7 @@ void NetworkManager::processMqttMessage(const QString &topic,
       m_gameData->recordMqttObservation(topic, 0, m_receiptWallMs, m_receiptMonotonicMs);
     else if (topic == QLatin1String("RobotStaticStatus"))
       m_gameData->recordMqttObservation(topic, parsedFields.value("robot_id").toInt(), m_receiptWallMs, m_receiptMonotonicMs);
-    else if (topic == QLatin1String("RobotDynamicStatus") || topic == QLatin1String("RobotModuleStatus"))
+    else if (topic == QLatin1String("RobotDynamicStatus") || topic == QLatin1String("RobotModuleStatus") || topic == QLatin1String("GlobalUnitStatus"))
       m_gameData->recordMqttObservation(topic, m_gameData->getCurrentRobotId(), m_receiptWallMs, m_receiptMonotonicMs);
     else if (topic == QLatin1String("Event") && parsedFields.value("event_id").toInt() == 16)
       m_gameData->recordMqttObservation(QStringLiteral("Event16"), 0, m_receiptWallMs, m_receiptMonotonicMs);
