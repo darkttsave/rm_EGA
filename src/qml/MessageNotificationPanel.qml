@@ -19,8 +19,22 @@ Item {
     // gameData 由 MainWindow 注入 QML 上下文，统一在消息面板入口适配。
     // qmllint disable unqualified
     readonly property var gameDataContext: typeof gameData !== "undefined" ? gameData : null
+    readonly property var uiConfigContext: typeof uiConfig !== "undefined" ? uiConfig : null
     // qmllint enable unqualified
-    property var systemMsgList: root.gameDataContext ? root.gameDataContext.systemMessages : []
+    readonly property var robot: gameDataContext ? gameDataContext.myRobot : ({})
+    readonly property bool showHeavyRmul: Number(robot.type) === 10 && (!uiConfigContext || uiConfigContext.competitionUiMode === "rmul")
+    readonly property var reception: gameDataContext ? gameDataContext.mqttReceptionMetadata : ({})
+    readonly property var eventReceipt: (reception.topics || ({})).Event16 || ({})
+    readonly property string event16NoticeText: !gameDataContext || !gameDataContext.event16Received || !showHeavyRmul ? "" :
+        "收到 42mm 发射机构安装成功事件" + (eventReceipt.sessionState === "current" ? "" :
+        eventReceipt.sessionState === "historical" || eventReceipt.sessionState === "disconnected" ? "（历史）" : "（来源未确认）")
+    property var systemMsgList: {
+        var original = root.gameDataContext ? root.gameDataContext.systemMessages : []
+        var result = []
+        for (var i = 0; i < original.length; ++i) result.push(original[i])
+        if (root.event16NoticeText !== "") result.push({text: root.event16NoticeText, color: "#8de0ff"})
+        return result
+    }
     property var robotMsgList: root.gameDataContext ? root.gameDataContext.robotMessages : []
     property int remainTime: root.gameDataContext && root.gameDataContext.remainTime !== undefined
         ? Number(root.gameDataContext.remainTime) : 0

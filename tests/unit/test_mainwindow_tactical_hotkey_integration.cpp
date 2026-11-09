@@ -1,6 +1,7 @@
 #include "core/GameData.h"
 #include "config/ConfigManager.h"
 #include "network/MqttManager.h"
+#include "network/OfficialMessageHandler.h"
 #include <QProcess>
 #include <QStandardPaths>
 #include <QTcpServer>
@@ -45,6 +46,39 @@ class TestMainWindowTacticalHotkeyIntegration : public QObject {
   QTemporaryDir configDir;
 
 private slots:
+  void captureFullShootingPreview() {
+    const QString path = qEnvironmentVariable("RM_UIB4_FULL_PREVIEW");
+    if (path.isEmpty()) QSKIP("preview capture is opt-in");
+    qputenv("RM_CLIENT_ROBOT_ID", "1");
+    qputenv("RM_MQTT_BROKER", "127.0.0.1");
+    qputenv("RM_MQTT_PORT", "19999");
+    RM::MainWindow window;
+    window.setWindowState(Qt::WindowNoState); window.resize(1280, 720); window.show();
+    QTest::qWait(300);
+    QKeyEvent operationView(QEvent::KeyPress, Qt::Key_T, Qt::ControlModifier);
+    QApplication::sendEvent(window.centralWidget(), &operationView);
+    QCoreApplication::processEvents();
+    auto *data = window.findChild<GameData *>(); QVERIFY(data);
+    data->setCurrentRobotId(1); data->setMqttSessionState(true, "1");
+    robomaster::RobotStaticStatus stat; stat.set_robot_id(1); stat.set_connection_state(1);
+    stat.set_level(2); stat.set_max_health(300); stat.set_max_heat(100); stat.set_heat_cooldown_rate(12.5);
+    data->updateRobotStaticStatus(stat); data->recordMqttObservation("RobotStaticStatus", 1, 100000, 1000);
+    robomaster::RobotDynamicStatus dynamic; dynamic.set_current_health(120); dynamic.set_current_heat(25.5);
+    dynamic.set_last_projectile_fire_rate(12.5); dynamic.set_remaining_ammo(9);
+    data->updateRobotDynamicStatus(dynamic); data->recordMqttObservation("RobotDynamicStatus", 1, 100001, 1001);
+    robomaster::RobotModuleStatus modules; modules.set_modular_42mm(1); modules.set_big_shooter(1);
+    data->updateRobotModuleStatus(modules); data->recordMqttObservation("RobotModuleStatus", 1, 100002, 1002);
+    robomaster::GameStatus game; game.set_current_stage(4); game.set_current_round(2); game.set_stage_countdown_sec(216);
+    game.set_red_score(1); game.set_blue_score(2); data->updateGameStatus(game); data->recordMqttObservation("GameStatus", 0, 100003, 1003);
+    robomaster::GlobalUnitStatus global; global.set_total_cp_ally(30); global.set_total_cp_enemy(40);
+    data->updateGlobalUnitStatus(global); data->recordMqttObservation("GlobalUnitStatus", 1, 100004, 1004);
+    robomaster::Event event; event.set_event_id(16); std::string encoded = event.SerializeAsString();
+    RM::OfficialMessageHandler::handle("Event", QByteArray::fromStdString(encoded), *data);
+    data->recordMqttObservation("Event16", 0, 100005, 1005);
+    QCoreApplication::processEvents(); QTest::qWait(100);
+    QVERIFY(window.grab().save(path));
+    qunsetenv("RM_CLIENT_ROBOT_ID"); qunsetenv("RM_MQTT_BROKER"); qunsetenv("RM_MQTT_PORT");
+  }
   void initTestCase() {
     qputenv("RM_DISABLE_AUDIO", "1");
     qunsetenv("RM_CLIENT_ROBOT_ID");

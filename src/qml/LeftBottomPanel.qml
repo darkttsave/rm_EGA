@@ -19,6 +19,7 @@ Item {
     // gameData 由 MainWindow 注入，面板内统一从这个入口读取机器人状态。
     // qmllint disable unqualified
     readonly property var gameDataContext: typeof gameData !== "undefined" ? gameData : null
+    readonly property var uiConfigContext: typeof uiConfig !== "undefined" ? uiConfig : null
     // qmllint enable unqualified
 
     // === 数据属性（绑定 gameData 上下文） ===
@@ -238,6 +239,24 @@ Item {
 
     // 模块状态
     property var moduleStates: gameDataContext ? gameDataContext.moduleStates : [1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
+    readonly property var currentRobot: gameDataContext ? gameDataContext.myRobot : ({})
+    readonly property bool showHeavyRmul: Number(currentRobot.type) === 10 && (!uiConfigContext || uiConfigContext.competitionUiMode === "rmul")
+    readonly property var moduleMeta: gameDataContext ? gameDataContext.mqttReceptionMetadata : ({})
+    readonly property var moduleSnapshot: { root.moduleMeta; return gameDataContext ? gameDataContext.robotModuleStatus : ({}); }
+    readonly property var moduleReceipt: (moduleMeta.topics || ({})).RobotModuleStatus || ({})
+    function moduleReading(key) {
+        var value = moduleSnapshot[key]
+        if (!moduleSnapshot.received || Number(moduleSnapshot.robotId) !== Number(currentRobot.robotId) || value === undefined) return "未上报"
+        var label = key === "modular_42mm" ? (value === 1 ? "允许" : value === 0 ? "未允许" : "无效值") :
+                    (value === 1 ? "在线" : value === 0 ? "离线" : value === 2 ? "安装异常" : "无效值")
+        if (label === "无效值") return label + " " + value
+        if (moduleSnapshot.source !== "official_mqtt" || Number(moduleReceipt.identity) !== Number(currentRobot.robotId)) return label + "（来源未确认）"
+        if (moduleReceipt.sessionState === "historical" || moduleReceipt.sessionState === "disconnected" || moduleReceipt.sessionState === "identity_changed") return label + "（历史）"
+        if (moduleReceipt.sessionState !== "current") return label + "（来源未确认）"
+        return label
+    }
+    readonly property string heavyPermissionText: moduleReading("modular_42mm")
+    readonly property string heavyShooterText: moduleReading("big_shooter")
 
     property string teamPrefix: isRed ? "red" : "blue"
     property int safeRobotLevel: Math.max(1, Math.min(maxlevel, Math.round(Number(robotLevel) || 1)))
@@ -715,6 +734,7 @@ Item {
                         height: root.height * 0.10
                         Image{
                             id: moduleStateImage
+                            visible: !(root.showHeavyRmul && moduleStatusItem.index === 9)
 
                             width: root.width * 0.03
                             height: root.height * 0.09
@@ -724,11 +744,18 @@ Item {
                             source: "qrc:/images/my_robot/statusbar_signallamp_" + moduleStateImage.moduleState + "_single.png"
                             fillMode: Image.Stretch
                         }
+                        Rectangle {
+                            visible: root.showHeavyRmul && moduleStatusItem.index === 9
+                            width: root.width * 0.03; height: root.height * 0.07
+                            anchors.left: parent.left; anchors.verticalCenter: parent.verticalCenter
+                            color: root.heavyShooterText === "在线" ? "#55d99e" : root.heavyShooterText === "离线" || root.heavyShooterText === "安装异常" ? "#f16666" : "#929ca2"
+                            radius: 2
+                        }
                         Text {
                             anchors.left: parent.left
                             anchors.leftMargin: root.width * 0.03
                             anchors.verticalCenter: parent.verticalCenter
-                            text: moduleStatusArea.moduleNames[moduleStatusItem.index]
+                            text: root.showHeavyRmul && moduleStatusItem.index === 9 ? "42测速" : moduleStatusArea.moduleNames[moduleStatusItem.index]
                             color: "white"
                             font.pixelSize: root.height * 0.06
                             style: Text.Outline
@@ -736,6 +763,17 @@ Item {
                         }
                     }
                 }
+            }
+            Text {
+                objectName: "heavyInstallPermission"
+                visible: root.showHeavyRmul
+                anchors.right: parent.right; anchors.verticalCenter: parent.verticalCenter
+                width: root.width * 0.20
+                text: "42安装权限  " + root.heavyPermissionText + "\n42测速  " + root.heavyShooterText
+                color: root.heavyPermissionText === "允许" ? "#55d99e" : "#d5e0e5"
+                font.pixelSize: root.height * 0.055
+                wrapMode: Text.Wrap
+                style: Text.Outline; styleColor: "black"
             }
         }
     }

@@ -2706,6 +2706,7 @@ void MainWindow::createCenterArea() {
     m_leftBottomPanel->rootContext()->setContextProperty("gameData",
                                                          m_gameData);
   }
+  m_leftBottomPanel->rootContext()->setContextProperty("uiConfig", &ConfigManager::instance());
 
   m_leftBottomPanel->setSource(QUrl("qrc:/qml/LeftBottomPanel.qml"));
 
@@ -2739,6 +2740,7 @@ void MainWindow::createCenterArea() {
   if (m_gameData && messagePanel->rootContext()) {
     messagePanel->rootContext()->setContextProperty("gameData", m_gameData);
   }
+  messagePanel->rootContext()->setContextProperty("uiConfig", &ConfigManager::instance());
 
   messagePanel->setSource(QUrl("qrc:/qml/MessageNotificationPanel.qml"));
 

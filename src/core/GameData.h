@@ -1472,6 +1472,7 @@ private:
   bool m_dynamicReceived = false;
   QVariantMap m_robotModuleStatusMap; // 当前身份的最近一次模块状态及字段 presence
   bool m_robotModuleStatusReceived = false;
+  bool m_robotModuleMqttVerified = false; // 仅标识最近快照的接收来源，不改变模块业务状态
   QMap<QString, bool> m_lastModuleOnlineStates; // 模块上次在线态，用于离线消息去重
 
   // 伤害统计数据

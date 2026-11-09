@@ -54,9 +54,79 @@ template <typename T> QByteArray bytes(const T &message) {
 }
 }
 
+class TestUiMode : public QObject {
+  Q_OBJECT
+  Q_PROPERTY(QString competitionUiMode READ mode WRITE setMode NOTIFY modeChanged)
+public:
+  QString mode() const { return m_mode; }
+  void setMode(const QString &value) { if (m_mode != value) { m_mode = value; emit modeChanged(); } }
+signals:
+  void modeChanged();
+private:
+  QString m_mode = QStringLiteral("rmul");
+};
+
 class TestOfficialMessageHandler : public QObject {
   Q_OBJECT
 private slots:
+  void heavyPermissionAndEventInExistingUi() {
+    Q_INIT_RESOURCE(qml); GameData data; TestUiMode mode;
+    data.setCurrentRobotId(1); data.setMqttSessionState(true, "1");
+    QQuickWidget left; left.rootContext()->setContextProperty("gameData", &data);
+    left.rootContext()->setContextProperty("uiConfig", &mode);
+    left.setSource(QUrl("qrc:/qml/LeftBottomPanel.qml"));
+    QCOMPARE(left.status(), QQuickWidget::Ready); left.show();
+    QQuickWidget messages; messages.rootContext()->setContextProperty("gameData", &data);
+    messages.rootContext()->setContextProperty("uiConfig", &mode);
+    messages.setSource(QUrl("qrc:/qml/MessageNotificationPanel.qml"));
+    QCOMPARE(messages.status(), QQuickWidget::Ready); messages.show();
+    auto *root = left.rootObject(); auto *msg = messages.rootObject();
+    auto *permission = root->findChild<QQuickItem *>("heavyInstallPermission");
+    QVERIFY(permission); QTRY_VERIFY(permission->isVisible());
+    QCOMPARE(root->property("heavyPermissionText").toString(), QStringLiteral("未上报"));
+    QCOMPARE(root->property("heavyShooterText").toString(), QStringLiteral("未上报"));
+    QVERIFY(msg->property("event16NoticeText").toString().isEmpty());
+    robomaster::RobotModuleStatus modules; modules.set_modular_42mm(0);
+    const QStringList states{QStringLiteral("离线"), QStringLiteral("在线"), QStringLiteral("安装异常")};
+    for (int i = 0; i < 3; ++i) {
+      modules.set_big_shooter(i); data.updateRobotModuleStatus(modules);
+      QVERIFY(root->property("heavyPermissionText").toString().contains(QStringLiteral("来源未确认")));
+      data.recordMqttObservation("RobotModuleStatus", 1, 100001 + i, 1001 + i);
+      QCOMPARE(root->property("heavyPermissionText").toString(), QStringLiteral("未允许"));
+      QCOMPARE(root->property("heavyShooterText").toString(), states[i]);
+    }
+    modules.set_modular_42mm(1); modules.set_big_shooter(0);
+    data.updateRobotModuleStatus(modules); data.recordMqttObservation("RobotModuleStatus", 1, 100005, 1005);
+    QCOMPARE(root->property("heavyPermissionText").toString(), QStringLiteral("允许"));
+    QCOMPARE(root->property("heavyShooterText").toString(), QStringLiteral("离线"));
+    modules.set_modular_42mm(3); data.updateRobotModuleStatus(modules);
+    data.recordMqttObservation("RobotModuleStatus", 1, 100006, 1006);
+    QCOMPARE(root->property("heavyPermissionText").toString(), QStringLiteral("无效值 3"));
+    modules.set_modular_42mm(1); data.updateRobotModuleStatus(modules);
+    data.recordMqttObservation("RobotModuleStatus", 1, 100007, 1007);
+    const auto before = data.getRobotById(1)->shooterLocked;
+    robomaster::Event event; event.set_event_id(16);
+    QCOMPARE(OfficialMessageHandler::handle("Event", bytes(event), data), OfficialMessageHandler::Result::Parsed);
+    data.recordMqttObservation("Event16", 0, 100008, 1008);
+    QCOMPARE(msg->property("event16NoticeText").toString(), QStringLiteral("收到 42mm 发射机构安装成功事件"));
+    QCOMPARE(data.getRobotById(1)->shooterLocked, before);
+    data.setMqttSessionState(false, "1");
+    QVERIFY(root->property("heavyPermissionText").toString().contains(QStringLiteral("历史")));
+    QVERIFY(msg->property("event16NoticeText").toString().contains(QStringLiteral("历史")));
+    data.setMqttSessionState(true, "1");
+    QVERIFY(msg->property("event16NoticeText").toString().contains(QStringLiteral("历史")));
+    data.setCurrentRobotId(3); QTRY_VERIFY(!permission->isVisible());
+    QVERIFY(msg->property("event16NoticeText").toString().isEmpty());
+    data.setCurrentRobotId(1); QTRY_VERIFY(permission->isVisible());
+    QCOMPARE(root->property("heavyPermissionText").toString(), QStringLiteral("未上报"));
+    mode.setMode("rmuc"); QTRY_VERIFY(!permission->isVisible());
+    QVERIFY(msg->property("event16NoticeText").toString().isEmpty());
+    mode.setMode("rmul"); QTRY_VERIFY(permission->isVisible());
+    modules.Clear(); modules.set_power_manager(1);
+    data.updateRobotModuleStatus(modules); data.recordMqttObservation("RobotModuleStatus", 1, 100009, 1009);
+    QCOMPARE(root->property("heavyPermissionText").toString(), QStringLiteral("未上报"));
+    QCOMPARE(root->property("heavyShooterText").toString(), QStringLiteral("未上报"));
+  }
   void topBarVisualCapture() {
     const QString destination = qEnvironmentVariable("RM_UIB3_SNAPSHOT");
     if (destination.isEmpty()) QSKIP("visual capture is opt-in");

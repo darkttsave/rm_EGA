@@ -563,6 +563,7 @@ void GameData::setCurrentRobotId(qint64 robotId) {
   clearRobotDynamicStatus();
   m_robotModuleStatusMap.clear();
   m_robotModuleStatusReceived = false;
+  m_robotModuleMqttVerified = false;
   m_moduleStatus.clear();
   m_lastModuleOnlineStates.clear();
   emit moduleListChanged();
@@ -1890,8 +1891,9 @@ void GameData::updateRobotStaticStatus(const robomaster::RobotStaticStatus &data
     // Missing or invalid values never overwrite the effective parameters.
     QVariantMap observation;
     observation["received"] = true;
+    observation["source"] = QStringLiteral("protocol_unverified");
 #define OBSERVE(field) if (data.has_##field()) observation[QStringLiteral(#field)] = data.field()
-    OBSERVE(performance_system_shooter); OBSERVE(performance_system_chassis);
+    OBSERVE(level); OBSERVE(performance_system_shooter); OBSERVE(performance_system_chassis);
     OBSERVE(max_health); OBSERVE(max_heat); OBSERVE(heat_cooldown_rate);
     OBSERVE(max_power); OBSERVE(max_buffer_energy); OBSERVE(max_chassis_energy);
 #undef OBSERVE
@@ -2060,6 +2062,7 @@ QVariantMap GameData::mqttReceptionMetadata() const {
   for (auto it = m_mqttStaticMetadata.cbegin(); it != m_mqttStaticMetadata.cend(); ++it)
     staticRobots[it.key()] = annotate(it.value().toMap(), false);
   return {{"connected", m_mqttSessionConnected}, {"session", QVariant::fromValue(m_mqttSession)},
+          {"identityEpoch", QVariant::fromValue(m_mqttIdentityEpoch)},
           {"clientId", m_mqttSessionIdentity}, {"configuredIdentity", m_currentRobotId},
           {"topics", topics}, {"staticByRobot", staticRobots}};
 }
@@ -2091,6 +2094,14 @@ void GameData::recordMqttObservation(const QString &topic, int identity, qint64 
   if (isStatic && m_refereeRobotObservations.contains(identity)) {
     m_refereeRobotObservations[identity]["source"] = QStringLiteral("official_mqtt");
     m_refereeRobotObservations[identity]["session"] = QVariant::fromValue(m_mqttSession);
+  }
+  if (isStatic) {
+    if (RobotData *robot = findRobotById(identity)) {
+      robot->staticPerformanceObservation["source"] = QStringLiteral("official_mqtt");
+    }
+  }
+  if (topic == QLatin1String("RobotModuleStatus")) {
+    m_robotModuleMqttVerified = true;
   }
   if (topic == QLatin1String("GlobalUnitStatus")) {
     m_globalHealthMqttVerified = true;
@@ -2138,7 +2149,7 @@ void GameData::recordMqttObservation(const QString &topic, int identity, qint64 
     if (robot) {
       const auto observed = robot->staticPerformanceObservation;
       for (auto it = observed.cbegin(); it != observed.cend(); ++it) {
-        if (it.key() == QLatin1String("received")) continue;
+        if (it.key() == QLatin1String("received") || it.key() == QLatin1String("source")) continue;
         const double value = it.value().toDouble();
         const bool mode = it.key().startsWith(QLatin1String("performance_system_"));
         const bool valid = std::isfinite(value) && value >= 0 && value <= 65535 &&
@@ -4104,6 +4115,7 @@ QVariantMap GameData::robotModuleStatus() const {
   QVariantMap result = m_robotModuleStatusMap;
   result["received"] = m_robotModuleStatusReceived;
   result["robotId"] = m_robotModuleStatusReceived ? m_currentRobotId : 0;
+  result["source"] = m_robotModuleMqttVerified ? QStringLiteral("official_mqtt") : QStringLiteral("protocol_unverified");
   return result;
 }
 
@@ -4115,6 +4127,7 @@ void GameData::updateRobotModuleStatus(const robomaster::RobotModuleStatus &data
   }
   // Each message is a fresh snapshot. Missing optional fields remain unknown.
   m_robotModuleStatusMap.clear();
+  m_robotModuleMqttVerified = false;
 #define COPY_MODULE(field) if (data.has_##field()) m_robotModuleStatusMap[QStringLiteral(#field)] = data.field()
   COPY_MODULE(power_manager); COPY_MODULE(rfid); COPY_MODULE(light_strip);
   COPY_MODULE(small_shooter); COPY_MODULE(big_shooter); COPY_MODULE(uwb);
