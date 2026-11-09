@@ -38,11 +38,13 @@ ConfigManager::ConfigManager(QObject *parent)
 }
 
 QString ConfigManager::competitionUiMode() const {
+  if (qgetenv("RM_DEVTOOLS") != "1") return QStringLiteral("rmul");
   const QString mode = m_config.value("ui").toObject().value("competition_mode").toString();
   return mode == QLatin1String("rmuc") ? QStringLiteral("rmuc") : QStringLiteral("rmul");
 }
 
 bool ConfigManager::setCompetitionUiMode(const QString &mode) {
+  if (mode == QLatin1String("rmuc") && qgetenv("RM_DEVTOOLS") != "1") return false;
   if (mode != QLatin1String("rmul") && mode != QLatin1String("rmuc")) return false;
   {
     QMutexLocker locker(&m_mutex);

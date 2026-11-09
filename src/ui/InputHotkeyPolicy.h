@@ -7,6 +7,8 @@ class QWidget;
 
 namespace RM::InputHotkeyPolicy {
 
+bool isDeveloperMode();
+bool isDebugShortcut(const QKeyEvent *event);
 bool isGlobalPanelHotkey(int key);
 bool isSettingsPanelHotkey(int key);
 bool isDamagePanelHotkey(const QKeyEvent *event);

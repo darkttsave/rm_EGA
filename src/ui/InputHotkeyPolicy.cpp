@@ -4,6 +4,17 @@
 
 namespace RM::InputHotkeyPolicy {
 
+bool isDeveloperMode() { return qgetenv("RM_DEVTOOLS") == "1"; }
+
+bool isDebugShortcut(const QKeyEvent *event) {
+  if (!event || !(event->modifiers() & Qt::ControlModifier)) return false;
+  const int key = event->key();
+  if (key == Qt::Key_R || key == Qt::Key_F || key == Qt::Key_J || key == Qt::Key_K) return true;
+  const bool shift = event->modifiers() & Qt::ShiftModifier;
+  return shift && (key == Qt::Key_D || key == Qt::Key_T || key == Qt::Key_L ||
+                   key == Qt::Key_F8 || key == Qt::Key_F9);
+}
+
 bool isGlobalPanelHotkey(int key) {
   return key == Qt::Key_H || isSettingsPanelHotkey(key) || key == Qt::Key_M;
 }

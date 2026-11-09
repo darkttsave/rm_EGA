@@ -53,11 +53,13 @@ Rectangle {
     property bool robotShortcutPending: false
     // qmllint disable unqualified
     readonly property var uiConfigContext: typeof uiConfig !== "undefined" ? uiConfig : null
+    readonly property bool developerMode: typeof devToolsEnabled !== "undefined" && devToolsEnabled
     // qmllint enable unqualified
     readonly property string competitionUiMode: uiConfigContext ? uiConfigContext.competitionUiMode : "rmul"
     property string competitionModeError: ""
     onCompetitionUiModeChanged: competitionSelector.currentIndex = competitionUiMode === "rmuc" ? 1 : 0
     function chooseCompetitionUiMode(mode) {
+        if (!developerMode && mode === "rmuc") return false
         if (!uiConfigContext || !uiConfigContext.setCompetitionUiMode(mode)) {
             competitionModeError = "模式保存失败，请检查配置文件"
             return false
@@ -244,10 +246,11 @@ Rectangle {
                 font.pixelSize: root.height * 0.03
             }
 
-            Text { text: "赛项界面"; color: "white"; font.pixelSize: root.height * 0.03 }
+            Text { visible: root.developerMode; text: "赛项界面"; color: "white"; font.pixelSize: root.height * 0.03 }
             ComboBox {
                 id: competitionSelector
                 objectName: "competitionModeSelector"
+                visible: root.developerMode
                 model: ["RMUL", "RMUC"]
                 currentIndex: root.competitionUiMode === "rmuc" ? 1 : 0
                 Layout.preferredWidth: 110

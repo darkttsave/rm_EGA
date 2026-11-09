@@ -5,6 +5,19 @@ class TestInputHotkeyPolicy : public QObject {
   Q_OBJECT
 
 private slots:
+  void testDeveloperFlagAndShortcutBoundary() {
+    qunsetenv("RM_DEVTOOLS"); QVERIFY(!RM::InputHotkeyPolicy::isDeveloperMode());
+    qputenv("RM_DEVTOOLS", "0"); QVERIFY(!RM::InputHotkeyPolicy::isDeveloperMode());
+    qputenv("RM_DEVTOOLS", "false"); QVERIFY(!RM::InputHotkeyPolicy::isDeveloperMode());
+    qputenv("RM_DEVTOOLS", "1"); QVERIFY(RM::InputHotkeyPolicy::isDeveloperMode());
+    qunsetenv("RM_DEVTOOLS");
+    QKeyEvent test(QEvent::KeyPress, Qt::Key_R, Qt::ControlModifier);
+    QKeyEvent tactical(QEvent::KeyPress, Qt::Key_T, Qt::ControlModifier);
+    QKeyEvent regular(QEvent::KeyPress, Qt::Key_F, Qt::NoModifier);
+    QVERIFY(RM::InputHotkeyPolicy::isDebugShortcut(&test));
+    QVERIFY(!RM::InputHotkeyPolicy::isDebugShortcut(&tactical));
+    QVERIFY(!RM::InputHotkeyPolicy::isDebugShortcut(&regular));
+  }
   void testGlobalPanelHotkeys() {
     QVERIFY(RM::InputHotkeyPolicy::isGlobalPanelHotkey(Qt::Key_H));
     QVERIFY(RM::InputHotkeyPolicy::isGlobalPanelHotkey(Qt::Key_M));

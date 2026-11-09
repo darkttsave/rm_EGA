@@ -136,6 +136,53 @@ private slots:
     QCOMPARE(root->property("heavyPermissionText").toString(), QStringLiteral("未上报"));
     QCOMPARE(root->property("heavyShooterText").toString(), QStringLiteral("未上报"));
   }
+  void receivedLegacyDartEventsHaveNoBusinessEffects() {
+    GameData data; data.setCurrentRobotId(1);
+    QSignalSpy hits(&data, &GameData::dartMessageTriggered);
+    QSignalSpy gates(&data, &GameData::dartGateOpened);
+    const auto messagesBefore = data.property("systemMessages").toList();
+    robomaster::Event event; event.set_event_id(9); event.set_param("2,1");
+    QCOMPARE(OfficialMessageHandler::handle("Event", bytes(event), data), OfficialMessageHandler::Result::Parsed);
+    QCOMPARE(data.lastEventObservation().value("eventId").toInt(), 9);
+    QCOMPARE(hits.count(), 0); QCOMPARE(gates.count(), 0); QCOMPARE(data.property("systemMessages").toList(), messagesBefore);
+    event.set_event_id(10); event.set_param("2");
+    QCOMPARE(OfficialMessageHandler::handle("Event", bytes(event), data), OfficialMessageHandler::Result::Parsed);
+    QCOMPARE(data.lastEventObservation().value("eventId").toInt(), 10);
+    QCOMPARE(hits.count(), 0); QCOMPARE(gates.count(), 0); QCOMPARE(data.property("systemMessages").toList(), messagesBefore);
+    event.set_event_id(0x0101); event.set_param(std::to_string(1 << 20));
+    QCOMPARE(OfficialMessageHandler::handle("Event", bytes(event), data), OfficialMessageHandler::Result::Parsed);
+    QCOMPARE(data.lastEventObservation().value("eventId").toInt(), 0x0101);
+    QCOMPARE(hits.count(), 0);
+  }
+  void rmulExchangeShowsRulesWithoutPretendingEligibility() {
+    Q_INIT_RESOURCE(qml); Q_INIT_RESOURCE(resources);
+    GameData data; TestUiMode mode; data.setCurrentRobotId(3); data.setMqttSessionState(true, "3");
+    QQuickWidget panel; panel.rootContext()->setContextProperty("gameData", &data);
+    panel.rootContext()->setContextProperty("uiConfig", &mode);
+    panel.rootContext()->setContextProperty("devToolsEnabled", false);
+    panel.setSource(QUrl("qrc:/qml/ExchangePanel.qml"));
+    QCOMPARE(panel.status(), QQuickWidget::Ready); auto *root = panel.rootObject();
+    QCOMPARE(root->property("rmulExchangeText").toString(), QStringLiteral("17mm  10 金币 / 10 发"));
+    QCOMPARE(root->property("rmulEconomyText").toString(), QStringLiteral("未上报或非当前"));
+    QVERIFY(!root->property("rmulSupplyEligible").toBool());
+    QSignalSpy commands(root, SIGNAL(commonCommandRequested(int,int)));
+    root->setProperty("currentTransactionType", 2); QVariant sent;
+    QVERIFY(QMetaObject::invokeMethod(root, "commitCurrentTransaction", Q_RETURN_ARG(QVariant, sent)));
+    QVERIFY(!sent.toBool()); QCOMPARE(commands.count(), 0);
+    robomaster::GlobalLogisticsStatus msg; msg.set_remaining_economy(0); msg.set_total_economy_obtained(999);
+    data.updateGlobalLogisticsStatus(msg); data.recordMqttObservation("GlobalLogisticsStatus", 3, 100000, 1000);
+    QCOMPARE(root->property("rmulEconomyText").toString(), QStringLiteral("0"));
+    msg.clear_remaining_economy(); data.updateGlobalLogisticsStatus(msg); data.recordMqttObservation("GlobalLogisticsStatus", 3, 100001, 1001);
+    QCOMPARE(root->property("rmulEconomyText").toString(), QStringLiteral("未上报或非当前"));
+    msg.set_remaining_economy(100); data.updateGlobalLogisticsStatus(msg); data.recordMqttObservation("GlobalLogisticsStatus", 3, 100002, 1002);
+    data.setMqttSessionState(false, "3"); QCOMPARE(root->property("rmulEconomyText").toString(), QStringLiteral("未上报或非当前"));
+    data.setCurrentRobotId(101); QCOMPARE(root->property("rmulExchangeText").toString(), QStringLiteral("42mm  10 金币 / 1 发"));
+    data.setCurrentRobotId(107); QCOMPARE(root->property("rmulExchangeText").toString(), QStringLiteral("哨兵局内不可增加允许发弹量"));
+    QVERIFY(!root->property("rmulSupplyEligible").toBool()); QCOMPARE(commands.count(), 0);
+    mode.setMode("rmuc"); panel.rootContext()->setContextProperty("devToolsEnabled", true);
+    QVERIFY(QMetaObject::invokeMethod(root, "sendCommonCommandToServer", Q_RETURN_ARG(QVariant, sent), Q_ARG(QVariant, 6), Q_ARG(QVariant, 60)));
+    QVERIFY(!sent.toBool()); QCOMPARE(commands.count(), 0);
+  }
   void rmulTopRobotIconsUseOriginalAssets() {
     Q_INIT_RESOURCE(qml); Q_INIT_RESOURCE(resources);
     GameData data; TestUiMode mode;

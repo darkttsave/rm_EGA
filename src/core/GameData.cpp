@@ -18,6 +18,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QVariantMap>
+#include <QScopedValueRollback>
 #include <algorithm>
 #include <cmath>
 #include <chrono>
@@ -2331,6 +2332,7 @@ void GameData::eventInfo(const robomaster::Event &data) {
   const TeamColor currentTeam = currentRobot ? currentRobot->team : TeamColor::RED;
 
   const int eventId = data.event_id();
+  if ((eventId == 9 || eventId == 10) && !m_simulatingDart) return;
   const int runeType = currentRuneType();
   const QString param = QString::fromStdString(data.param()).trimmed();
   switch (eventId) {
@@ -2626,6 +2628,8 @@ void GameData::setDartMessageData(bool isRedTeam, int targetId,
 }
 
 void GameData::simulateDartHit(int team, int targetId) {
+  if (qgetenv("RM_DEVTOOLS") != "1") return;
+  QScopedValueRollback<bool> simulation(m_simulatingDart, true);
   // 走完整 processProtocolData 路径，与 MQTT 赛事引擎 Event topic 完全一致
   robomaster::RoboMasterMessage wrapper;
   auto *event = wrapper.mutable_event();
@@ -3819,7 +3823,7 @@ void GameData::processProtocolData(
         const quint8 dartTarget = (eventData >> 20) & 0x07;
         const quint8 prevDartTarget = (m_eventData >> 20) & 0x07;
 
-        if (dartTarget != prevDartTarget && dartTarget != 0) {
+        if (m_simulatingDart && dartTarget != prevDartTarget && dartTarget != 0) {
           const RobotData *currentRobot = getCurrentRobot();
           const bool myIsRed =
               currentRobot ? (currentRobot->team == TeamColor::RED)

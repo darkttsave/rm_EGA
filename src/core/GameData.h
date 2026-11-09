@@ -1539,6 +1539,7 @@ private:
 
   // 0x0101 场地事件数据缓存
   quint32 m_eventData = 0;
+  bool m_simulatingDart = false; // Only scoped local developer simulation.
   QVariantMap m_logisticsObservation;
   QVariantMap m_respawnObservation;
   QVariantMap m_penaltyObservation;

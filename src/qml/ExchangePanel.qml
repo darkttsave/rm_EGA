@@ -35,8 +35,24 @@ Rectangle {
     // gameData 由 MainWindow 注入 QML 上下文，统一在面板入口适配。
     // qmllint disable unqualified
     readonly property var gameDataContext: typeof gameData !== "undefined" ? gameData : null
+    readonly property var uiConfigContext: typeof uiConfig !== "undefined" ? uiConfig : null
+    readonly property bool developerPreview: typeof devToolsEnabled !== "undefined" && devToolsEnabled
     // qmllint enable unqualified
 
+
+    readonly property bool rmulDisplay: !uiConfigContext || uiConfigContext.competitionUiMode === "rmul"
+    readonly property int rmulRobotId: gameDataContext ? Number(gameDataContext.currentRobotId) : 0
+    readonly property int rmulNumber: rmulRobotId >= 100 ? rmulRobotId - 100 : rmulRobotId
+    readonly property bool rmulInfantry: rmulNumber >= 3 && rmulNumber <= 5
+    readonly property bool rmulHeavy: rmulNumber === 1
+    readonly property var rmulReception: gameDataContext ? gameDataContext.mqttReceptionMetadata : ({})
+    readonly property var rmulLogistics: { root.rmulReception; return gameDataContext ? gameDataContext.logisticsObservation : ({}); }
+    readonly property var rmulEconomyField: (rmulLogistics.fields || ({})).remaining_economy || ({})
+    readonly property var rmulReceipt: (rmulReception.topics || ({})).GlobalLogisticsStatus || ({})
+    readonly property string rmulEconomyText: rmulLogistics.identityMatches === true && rmulLogistics.source === "official_mqtt" && rmulReceipt.sessionState === "current" && rmulEconomyField.state === "valid" ? String(rmulEconomyField.valueString) : "未上报或非当前"
+    // RFID module health and can_remote_ammo are not supply-zone activation.
+    readonly property bool rmulSupplyEligible: false
+    readonly property string rmulExchangeText: rmulInfantry ? "17mm  10 金币 / 10 发" : rmulHeavy ? "42mm  10 金币 / 1 发" : rmulNumber === 7 ? "哨兵局内不可增加允许发弹量" : "当前身份不支持兑换"
 
     // 当前操作机器人所属队伍剩余经济（由 gameData 链路驱动）
     readonly property int currentTeamEconomy: {
@@ -138,6 +154,7 @@ Rectangle {
 
     //使用network
     function sendCommonCommandToServer(cmdType, param) {
+        if (root.developerPreview || root.rmulDisplay) return false
         root.commonCommandRequested(cmdType, param)
         return true
     }
@@ -161,6 +178,7 @@ Rectangle {
 
     //发送消息
     function commitCurrentTransaction() {
+        if (root.rmulDisplay) return false // Supply-zone eligibility has no verified input.
         var cmd = buildCommonCommandByTransaction()
         if (!cmd) {
             console.warn("[ExchangePanel] invalid transaction type:", root.currentTransactionType)
@@ -172,7 +190,7 @@ Rectangle {
     //----------------------4.按键触发--------------------------------
     Shortcut {
         sequence: "Ctrl+1";
-        enabled: root.enableHealthExchange
+        enabled: !root.rmulDisplay && root.enableHealthExchange
         onActivated: {
             root.currentTransactionType = root.txHealth
             root.showConfirm("是否消耗 " + root.healthCost + " 金币\n兑换 60% 血量恢复？")
@@ -180,7 +198,7 @@ Rectangle {
     }
     Shortcut {
         sequence: "Ctrl+2";
-        enabled: root.enable17mmExchange
+        enabled: !root.rmulDisplay && root.enable17mmExchange
         onActivated: {
             root.currentTransactionType = root.tx17mm
             root.showConfirm("是否消耗 150 金币\n兑换 100 发 17mm 弹丸？")
@@ -188,7 +206,7 @@ Rectangle {
     }
     Shortcut {
         sequence: "Ctrl+3";
-        enabled: root.enable42mmExchange
+        enabled: !root.rmulDisplay && root.enable42mmExchange
         onActivated: {
             root.currentTransactionType = root.tx42mm
             root.showConfirm("是否消耗 150 金币\n兑换 10 发 42mm 弹丸？")
@@ -207,7 +225,17 @@ Rectangle {
         radius: root.radius
         visible: root.isVisible
 
+        Column {
+            objectName: "rmulExchangeInfo"
+            visible: root.rmulDisplay
+            anchors.centerIn: parent; spacing: 12
+            Text { text: root.rmulExchangeText; color: "white"; font.pixelSize: 15 }
+            Text { text: "当前金币：" + root.rmulEconomyText; color: "#d5dfe4"; font.pixelSize: 13 }
+            Text { text: root.rmulNumber === 7 ? "不可兑换" : "补给区资格未确认，暂不可兑换"; color: "#c7ced1"; font.pixelSize: 13 }
+        }
+
         ColumnLayout {
+            visible: !root.rmulDisplay
             id: columnLayout
             anchors.fill: parent
             anchors.leftMargin: 0.04 * root.width

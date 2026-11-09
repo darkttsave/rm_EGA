@@ -907,12 +907,14 @@ void MainWindow::setupConnections() {
       &MainWindow::onOfficialEventPopupRequested);
   connect(m_gameData, &GameData::runeActivable, this,
           [this](int runeType) {
+            if (ConfigManager::instance().competitionUiMode() == QStringLiteral("rmul")) return;
             if (m_battleMessage) {
               m_battleMessage->showRuneActivable(runeType);
             }
           });
   connect(m_gameData, &GameData::runeActived, this,
           [this](int runeType) {
+            if (ConfigManager::instance().competitionUiMode() == QStringLiteral("rmul")) return;
             if (m_battleMessage) {
               m_battleMessage->showRuneActived(runeType);
             }
@@ -943,6 +945,7 @@ void MainWindow::setupConnections() {
           });
   connect(m_gameData, &GameData::dartMessageTriggered, this,
           [this]() {
+            if (ConfigManager::instance().competitionUiMode() == QStringLiteral("rmul")) return;
             if (!m_qmlEventMessagePanel) {
               return;
             }
@@ -1371,7 +1374,7 @@ void MainWindow::finishServicesStartup(bool mqttModeEnabled) {
   m_videoBackground->playUrl(videoStreamUrl);
 
   // 启动模拟器
-  if (m_simulator) {
+  if (m_simulator && RM::InputHotkeyPolicy::isDeveloperMode()) {
     m_simulator->startSimulation();
   }
 }
@@ -1999,7 +2002,7 @@ void MainWindow::updateTacticalTimedEventPopupState() {
     m_tacticalTimedEventManualOverrideUntilMs = 0;
   }
 
-  const bool tacticalReady = m_tacticalMode &&
+  const bool tacticalReady = ConfigManager::instance().competitionUiMode() != QStringLiteral("rmul") && m_tacticalMode &&
                              m_qmlTacticalPage &&
                              m_qmlTacticalPage->isVisible() &&
                              m_gameData->getCurrentStage() == GameStage::BATTLE;
@@ -2059,6 +2062,10 @@ void MainWindow::updateTacticalTimedEventPopupState() {
 }
 
 void MainWindow::updateRunePanelVisibility() {
+  if (ConfigManager::instance().competitionUiMode() == QStringLiteral("rmul")) {
+    if (m_qmlRunePanel) m_qmlRunePanel->hide();
+    return;
+  }
   if (!m_qmlRunePanel || !m_gameData || m_qmlRunePanel->status() != QQuickWidget::Ready) {
     return;
   }
@@ -3837,7 +3844,10 @@ void MainWindow::updateExchangeHintText(const QString &robotType) {
   const bool isAerial = false;
 
   bool isSpecialRobot = isEngineer || isAerial;
-  const bool canOpenRemoteExchange = canOpenRemoteExchangePanel();
+  const bool rmulDisplay = ConfigManager::instance().competitionUiMode() == QStringLiteral("rmul");
+  const int rmulRobotNumber = m_gameData ? m_gameData->currentRobotId() % 100 : 0;
+  const bool rmulSupported = rmulRobotNumber == 1 || (rmulRobotNumber >= 3 && rmulRobotNumber <= 5);
+  const bool canOpenRemoteExchange = rmulDisplay ? rmulSupported : canOpenRemoteExchangePanel();
 
   // V1.3.0 RobotDynamicStatus 已直接上报 can_remote_heal / can_remote_ammo。
   // 脱战只保留在协议侧或缺失数据时作为保护，不再由 UI 自行推导远程兑换许可。
@@ -3846,7 +3856,7 @@ void MainWindow::updateExchangeHintText(const QString &robotType) {
       m_qmlExchangePanel->hide();
       m_qmlExchangePanel->setEnabled(false);
     }
-    const QString unavailableText = QStringLiteral("不满足远程兑换条件");
+    const QString unavailableText = rmulDisplay ? QStringLiteral("当前身份不支持兑换") : QStringLiteral("不满足远程兑换条件");
     if (m_exchangeHint->text() != unavailableText) {
       m_exchangeHint->setText(unavailableText);
     }
@@ -3870,7 +3880,7 @@ void MainWindow::updateExchangeHintText(const QString &robotType) {
   } else if (isAerial) {
     text = QString("按\"H\"%1空中支援面板").arg(actionText);
   } else {
-    text = QString("按\"H\"%1远程兑换面板").arg(actionText);
+    text = QString(rmulDisplay ? "按\"H\"%1兑换信息" : "按\"H\"%1远程兑换面板").arg(actionText);
   }
 
   if (text.isEmpty()) {
@@ -5088,11 +5098,14 @@ bool MainWindow::isKeyboardMouseControlBlocked() const {
 }
 
 bool MainWindow::isInputEventFromClientWindow(QObject *obj) const {
-  const QWidget *widget = qobject_cast<QWidget *>(obj);
-  if (!widget) {
-    return false;
-  }
-  return widget == this || isAncestorOf(widget);
+  if (const QWidget *widget = qobject_cast<QWidget *>(obj))
+    return widget == this || isAncestorOf(widget);
+  const auto *item = qobject_cast<QQuickItem *>(obj);
+  const QQuickWindow *quickWindow = item ? item->window() : qobject_cast<QQuickWindow *>(obj);
+  if (!quickWindow) return false;
+  for (const auto *view : findChildren<QQuickWidget *>())
+    if (view->quickWindow() == quickWindow) return true;
+  return false;
 }
 
 bool MainWindow::tryHandleRespawnShortcut(QKeyEvent *event) {
@@ -5824,6 +5837,7 @@ void MainWindow::setupKeyPanels() {
                                                           m_gameData);
   }
   m_qmlSettingsPanel->rootContext()->setContextProperty("uiConfig", &ConfigManager::instance());
+  m_qmlSettingsPanel->rootContext()->setContextProperty("devToolsEnabled", RM::InputHotkeyPolicy::isDeveloperMode());
   m_qmlSettingsPanel->setSource(QUrl("qrc:/qml/SettingsPanel.qml"));
   m_settingsPanelRoot = m_qmlSettingsPanel->rootObject();
 
@@ -6141,6 +6155,7 @@ void MainWindow::playSoundFromResourceFolder(const QString &fileName) {
 }
 
 void MainWindow::playRuneVoicePrompt(int runeType, int remainingChances) {
+  if (ConfigManager::instance().competitionUiMode() == QStringLiteral("rmul")) return;
   const auto type = runeType == static_cast<int>(RM::RuneVoiceType::Large)
                         ? RM::RuneVoiceType::Large
                         : RM::RuneVoiceType::Small;
@@ -6584,6 +6599,11 @@ bool MainWindow::eventFilter(QObject *obj, QEvent *event) {
       (event->type() == QEvent::ShortcutOverride ||
        event->type() == QEvent::KeyPress || event->type() == QEvent::KeyRelease)) {
     auto *key = static_cast<QKeyEvent *>(event);
+    if (event->type() != QEvent::KeyRelease && !RM::InputHotkeyPolicy::isDeveloperMode() &&
+        RM::InputHotkeyPolicy::isDebugShortcut(key)) {
+      event->accept();
+      return true;
+    }
     const bool chord = qgetenv("RM_DEVTOOLS") == "1" && key->key() == Qt::Key_F10 &&
         key->modifiers() == (Qt::ControlModifier | Qt::ShiftModifier);
     const bool panelVisible = m_rm27DevPanel && m_rm27DevPanel->isVisible();
@@ -6930,6 +6950,9 @@ bool MainWindow::event(QEvent *e) {
 }
 
 void MainWindow::keyPressEvent(QKeyEvent *event) {
+  if (!RM::InputHotkeyPolicy::isDeveloperMode() && RM::InputHotkeyPolicy::isDebugShortcut(event)) {
+    event->accept(); return;
+  }
   if (tryHandleSettingsPanelShortcut(event)) {
     event->accept();
     return;
@@ -7208,7 +7231,7 @@ void MainWindow::keyPressEvent(QKeyEvent *event) {
           coolingTimer->setObjectName("debugCoolingTimer");
           coolingTimer->setInterval(20); // 50 Hz 更新
           connect(coolingTimer, &QTimer::timeout, this, [this, coolingTimer]() {
-            if (!m_gameData) {
+            if (!RM::InputHotkeyPolicy::isDeveloperMode() || !m_gameData) {
               coolingTimer->stop();
               return;
             }
@@ -7552,7 +7575,10 @@ void MainWindow::keyPressEvent(QKeyEvent *event) {
 
     bool isEngineer = m_exchangeQmlSource.contains("ExchangePanelEngineer.qml");
     bool isAerial = m_exchangeQmlSource.contains("ExchangePanelAerial.qml");
-    if (!isEngineer && !isAerial && !canOpenRemoteExchangePanel()) {
+    const bool rmulDisplay = ConfigManager::instance().competitionUiMode() == QStringLiteral("rmul");
+    const int robotNumber = m_gameData ? m_gameData->currentRobotId() % 100 : 0;
+    if (rmulDisplay && !(robotNumber == 1 || (robotNumber >= 3 && robotNumber <= 5))) break;
+    if (!rmulDisplay && !isEngineer && !isAerial && !canOpenRemoteExchangePanel()) {
       if (m_qmlExchangePanel) {
         safeQuickHide(m_qmlExchangePanel);
         m_qmlExchangePanel->setEnabled(false);
@@ -7573,6 +7599,8 @@ void MainWindow::keyPressEvent(QKeyEvent *event) {
       m_qmlExchangePanel->setClearColor(Qt::transparent);
       m_qmlExchangePanel->rootContext()->setContextProperty("gameData",
                                                             m_gameData);
+      m_qmlExchangePanel->rootContext()->setContextProperty("uiConfig", &ConfigManager::instance());
+      m_qmlExchangePanel->rootContext()->setContextProperty("devToolsEnabled", RM::InputHotkeyPolicy::isDeveloperMode());
 
       // 将 network 对象传递给 QML
       if (m_networkManager) {
@@ -7704,8 +7732,8 @@ void MainWindow::keyPressEvent(QKeyEvent *event) {
     if (tryHandleAerialAirSupportInterruptShortcut()) {
       break;
     }
-    // 切换脱战状态 isOutOfCombat
-    if (m_gameData) {
+    // Only the local simulation is gated; normal N handling above is retained.
+    if (RM::InputHotkeyPolicy::isDeveloperMode() && m_gameData) {
       m_gameData->toggleCurrentRobotOutOfCombat();
     }
     break;
@@ -7740,7 +7768,7 @@ void MainWindow::keyPressEvent(QKeyEvent *event) {
     break;
   // 按下Q按键模拟兑换金币复活
   case Qt::Key_Q:
-    if (m_gameData) {
+    if (RM::InputHotkeyPolicy::isDeveloperMode() && m_gameData) {
       // 构造两个 QVariantMap 模拟复活进度的突然中断
       QVariantMap statusBefore;
       statusBefore["is_pending_respawn"] = true;
@@ -8082,6 +8110,8 @@ void MainWindow::onSettingsLoginRequested(int robotId) {
 }
 
 void MainWindow::onCommonCommandRequested(int commandType, int param) {
+  // Developer mode is for observation and preview, not command authority.
+  if (RM::InputHotkeyPolicy::isDeveloperMode()) return;
   if (!m_networkManager) {
     qWarning() << "MainWindow: exchange command dropped; NetworkManager unavailable"
                << "commandType=" << commandType << "param=" << param;
@@ -8126,6 +8156,7 @@ void MainWindow::onSettingsLogoutRequested() {
 
 void MainWindow::onSimulatorDataReceived(PacketType type,
                                          const QByteArray &data) {
+  if (!RM::InputHotkeyPolicy::isDeveloperMode()) return;
   if (!m_gameData)
     return;
 

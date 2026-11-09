@@ -9,6 +9,7 @@ class TestConfigManagerVideo : public QObject {
 
 private slots:
   void competitionModePersistenceAndFallback() {
+    qputenv("RM_DEVTOOLS", "1");
     QTemporaryDir dir; QVERIFY(dir.isValid());
     const QString path = dir.filePath("config.json");
     QVERIFY(QFile::copy(QFileInfo(QStringLiteral(__FILE__)).absolutePath() + "/../../config.example.json", path));
@@ -19,6 +20,8 @@ private slots:
     QCOMPARE(config.getClientRobotId(), identity);
     QVERIFY(config.loadConfig(path));
     QCOMPARE(config.competitionUiMode(), QStringLiteral("rmuc"));
+    qunsetenv("RM_DEVTOOLS"); QCOMPARE(config.competitionUiMode(), QStringLiteral("rmul"));
+    QVERIFY(!config.setCompetitionUiMode("rmuc")); qputenv("RM_DEVTOOLS", "1");
     QVERIFY(!config.setCompetitionUiMode("invalid"));
     QCOMPARE(config.competitionUiMode(), QStringLiteral("rmuc"));
     QFile file(path); QVERIFY(file.open(QIODevice::ReadOnly));
@@ -30,6 +33,7 @@ private slots:
     QVERIFY(config.loadConfig(path)); QCOMPARE(config.competitionUiMode(), QStringLiteral("rmul"));
     QVERIFY(file.remove()); QVERIFY(!config.setCompetitionUiMode("rmuc"));
     QCOMPARE(config.competitionUiMode(), QStringLiteral("rmul"));
+    qunsetenv("RM_DEVTOOLS");
   }
   void optionalArModelIsNotAssumed() {
     QCOMPARE(ConfigManager::instance().getARModelPath(), QString());

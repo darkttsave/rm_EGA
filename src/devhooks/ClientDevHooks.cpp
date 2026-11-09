@@ -103,9 +103,7 @@ ClientDevHooks::ClientDevHooks(GameData *gameData,
 ClientDevHooks::~ClientDevHooks() { stop(); }
 
 bool ClientDevHooks::isEnabled() {
-  const QByteArray devtoolsEnv = qgetenv("RM_DEVTOOLS");
-  return !devtoolsEnv.isEmpty() && devtoolsEnv != "0" &&
-         devtoolsEnv.toLower() != "false";
+  return qgetenv("RM_DEVTOOLS") == "1";
 }
 
 bool ClientDevHooks::start() {
@@ -484,19 +482,10 @@ ClientDevHooks::handleCommonCommand(const QHttpServerRequest &request) {
     return jsonError(QStringLiteral("Missing or invalid cmd_type"));
   }
 
-  // This generic development endpoint can otherwise bypass the frozen UI.
-  // Legacy CommonCommand 3/4 are the audited free/paid respawn actions.
-  if (cmdType == 3 || cmdType == 4) {
-    return jsonError(QStringLiteral("RMUL respawn control is frozen"), 403);
-  }
-
-  m_networkManager->sendCommonCommand(cmdType, param);
-  recordTraceEvent(QStringLiteral("common_command_dispatched"),
-                   QJsonObject{{"cmd_type", cmdType}, {"param", param}});
-
-  return jsonResponse(QJsonObject{{"emitted", true},
-                                  {"cmd_type", cmdType},
-                                  {"param", param}});
+  // This endpoint cannot prove eligibility or execution and must not bypass
+  // the read-only exchange / respawn boundaries through developer mode.
+  Q_UNUSED(param);
+  return jsonError(QStringLiteral("Development common-command dispatch is disabled"), 403);
 }
 
 bool ClientDevHooks::dispatchKeyEvent(int key, bool pressed,

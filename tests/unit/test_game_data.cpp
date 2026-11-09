@@ -6,6 +6,11 @@
 #include <QtTest>
 
 namespace {
+struct ScopedDevMode {
+  QByteArray previous = qgetenv("RM_DEVTOOLS"); bool existed = qEnvironmentVariableIsSet("RM_DEVTOOLS");
+  ScopedDevMode() { qputenv("RM_DEVTOOLS", "1"); }
+  ~ScopedDevMode() { if (existed) qputenv("RM_DEVTOOLS", previous); else qunsetenv("RM_DEVTOOLS"); }
+};
 
 QStringList *g_runeStatusLogMessages = nullptr;
 
@@ -791,6 +796,7 @@ private slots:
   }
 
   void testDartHitOcclusionDurationFollowsFixedTargetHitCount() {
+    ScopedDevMode scopedDevMode;
     GameData gameData;
 
     gameData.simulateDartHit(1, 1);
@@ -872,6 +878,7 @@ private slots:
   }
 
   void testDartHitOcclusionDurationForMovingTargetsIsAlwaysTenSeconds() {
+    ScopedDevMode scopedDevMode;
     GameData gameData;
 
     gameData.simulateDartHit(1, 1);
@@ -888,6 +895,7 @@ private slots:
   }
 
   void testDartHitCountersResetWhenBattleReenters() {
+    ScopedDevMode scopedDevMode;
     GameData gameData;
 
     gameData.simulateDartHit(1, 1);
@@ -913,6 +921,7 @@ private slots:
   }
 
   void testDartHitCountersResetWhenEnteringSettlement() {
+    ScopedDevMode scopedDevMode;
     GameData gameData;
 
     gameData.simulateDartHit(1, 1);

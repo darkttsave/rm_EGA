@@ -10,12 +10,14 @@
 #include <QFile>
 #include "ui/MainWindow.h"
 #include "widgets/HeroVideoWidget.h"
+#include "widgets/GameResultWidget.h"
 
 #include <QApplication>
 #include <QImage>
 #include <QKeyEvent>
 #include <QQuickItem>
 #include <QQuickWidget>
+#include <QQuickWindow>
 #include <QQmlContext>
 #include <QSignalSpy>
 #include <QWidget>
@@ -24,6 +26,11 @@
 #include "robomaster.pb.h"
 
 namespace {
+struct ScopedDevMode {
+  QByteArray previous = qgetenv("RM_DEVTOOLS"); bool existed = qEnvironmentVariableIsSet("RM_DEVTOOLS");
+  ScopedDevMode() { qputenv("RM_DEVTOOLS", "1"); }
+  ~ScopedDevMode() { if (existed) qputenv("RM_DEVTOOLS", previous); else qunsetenv("RM_DEVTOOLS"); }
+};
 
 int childStackIndex(QWidget *parent, QObject *child) {
   if (!parent || !child) {
@@ -146,6 +153,7 @@ private slots:
   }
 
   void testSelectionAndCommandSafetyWithLocalBroker() {
+    ScopedDevMode scopedDevMode;
 #ifndef RM_HAS_MQTT
     QSKIP("Paho MQTT unavailable");
 #else
@@ -375,7 +383,66 @@ private slots:
     qunsetenv("RM_DEVTOOLS");
   }
 
+  void operatorModeBlocksDebugInjection() {
+    qunsetenv("RM_DEVTOOLS");
+    RM::MainWindow window; auto *data = window.findChild<GameData *>();
+    auto *result = window.findChild<GameResultWidget *>(); QVERIFY(data); QVERIFY(result);
+    const auto timeBefore = data->getGameTime(); const auto stageBefore = data->getCurrentStage();
+    const auto hpBefore = data->currentHealth(); const auto messagesBefore = data->property("systemMessages").toList();
+    const auto *robot = data->getRobotById(1); QVERIFY(robot);
+    const auto ammoBefore = robot->allowedAmmo17mm; const auto heatBefore = robot->currentHeat;
+    const auto lockedBefore = robot->shooterLocked;
+    QSignalSpy kills(data, &GameData::killEventOccurred);
+    const QList<QPair<int, Qt::KeyboardModifiers>> keys = {
+      {Qt::Key_R, Qt::ControlModifier}, {Qt::Key_F, Qt::ControlModifier},
+      {Qt::Key_J, Qt::ControlModifier}, {Qt::Key_K, Qt::ControlModifier},
+      {Qt::Key_K, Qt::ControlModifier | Qt::ShiftModifier},
+      {Qt::Key_D, Qt::ControlModifier | Qt::ShiftModifier},
+      {Qt::Key_T, Qt::ControlModifier | Qt::ShiftModifier},
+      {Qt::Key_L, Qt::ControlModifier | Qt::ShiftModifier},
+      {Qt::Key_F8, Qt::ControlModifier | Qt::ShiftModifier},
+      {Qt::Key_F9, Qt::ControlModifier | Qt::ShiftModifier},
+      {Qt::Key_Q, Qt::NoModifier}, {Qt::Key_N, Qt::NoModifier}};
+    for (const auto &entry : keys) {
+      QKeyEvent key(QEvent::KeyPress, entry.first, entry.second);
+      QApplication::sendEvent(window.centralWidget(), &key);
+    }
+    QCOMPARE(data->getGameTime(), timeBefore); QCOMPARE(data->getCurrentStage(), stageBefore);
+    QCOMPARE(data->currentHealth(), hpBefore); QCOMPARE(data->property("systemMessages").toList(), messagesBefore);
+    QCOMPARE(robot->allowedAmmo17mm, ammoBefore); QCOMPARE(robot->currentHeat, heatBefore); QCOMPARE(robot->shooterLocked, lockedBefore);
+    QCOMPARE(kills.count(), 0); QVERIFY(result->isHidden());
+    auto *settings = window.findChild<QQuickWidget *>(QStringLiteral("settingsPanel")); QVERIFY(settings && settings->rootObject());
+    auto *selector = settings->rootObject()->findChild<QObject *>(QStringLiteral("competitionModeSelector")); QVERIFY(selector);
+    QVERIFY(!selector->property("visible").toBool());
+    auto *top = window.findChild<QQuickWidget *>(QStringLiteral("topInfoBar")); QVERIFY(top && top->quickWindow());
+    QKeyEvent qmlShortcut(QEvent::KeyPress, Qt::Key_R, Qt::ControlModifier);
+    QApplication::sendEvent(top->quickWindow(), &qmlShortcut); QVERIFY(result->isHidden());
+    QVERIFY(!ConfigManager::instance().setCompetitionUiMode("rmuc"));
+    QCOMPARE(ConfigManager::instance().competitionUiMode(), QStringLiteral("rmul"));
+    QVERIFY(window.tacticalLargeMapMode());
+    QKeyEvent normalTacticalToggle(QEvent::KeyPress, Qt::Key_T, Qt::ControlModifier);
+    QApplication::sendEvent(window.centralWidget(), &normalTacticalToggle);
+    QVERIFY(!window.tacticalLargeMapMode());
+  }
+
+  void testRmulDartDoesNotSwitchView() {
+    ScopedDevMode scopedDevMode;
+    struct RestoreMode { QString value = ConfigManager::instance().competitionUiMode(); ~RestoreMode() { ConfigManager::instance().setCompetitionUiMode(value); } } restoreMode;
+    ConfigManager::instance().setCompetitionUiMode("rmul");
+    RM::MainWindow window;
+    QVERIFY(window.tacticalLargeMapMode());
+    QKeyEvent dartHit(QEvent::KeyPress, Qt::Key_D, Qt::ControlModifier | Qt::ShiftModifier);
+    QApplication::sendEvent(&window, &dartHit);
+    QVERIFY(window.tacticalLargeMapMode());
+    auto *data = window.findChild<GameData *>(); QVERIFY(data);
+    QCOMPARE(data->getGameTime(), quint16(300));
+    QCOMPARE(data->lastEventObservation().value("eventId").toInt(), 9);
+  }
+
   void testTacticalMapStartsLargeAndMIsScoped() {
+    ScopedDevMode scopedDevMode;
+    struct RestoreMode { QString value = ConfigManager::instance().competitionUiMode(); ~RestoreMode() { ConfigManager::instance().setCompetitionUiMode(value); } } restoreMode;
+    ConfigManager::instance().setCompetitionUiMode("rmuc");
     // MainWindow 使用零延时 single-shot 延后启动服务。保持本测试同步执行，
     // 这样只覆盖 UI 路由，不启动网络、模拟器和视频服务。
     RM::MainWindow window;
@@ -470,6 +537,9 @@ private slots:
   }
 
   void testDartOcclusionReturnsToMapOnlyTacticalScreen() {
+    ScopedDevMode scopedDevMode;
+    struct RestoreMode { QString value = ConfigManager::instance().competitionUiMode(); ~RestoreMode() { ConfigManager::instance().setCompetitionUiMode(value); } } restoreMode;
+    ConfigManager::instance().setCompetitionUiMode("rmuc");
     RM::MainWindow window;
     QWidget *clientTarget = window.centralWidget();
     QVERIFY(clientTarget);
@@ -503,6 +573,7 @@ private slots:
   }
 
   void testTacticalLargeMapSitsBetweenPhasePopupAndTimedEventPopup() {
+    ScopedDevMode scopedDevMode;
     RM::MainWindow window;
     window.resize(1920, 1080);
     window.show();
