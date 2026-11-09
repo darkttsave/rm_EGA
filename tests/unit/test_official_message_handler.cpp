@@ -85,6 +85,8 @@ private slots:
     QVERIFY(permission); QTRY_VERIFY(permission->isVisible());
     QCOMPARE(root->property("heavyPermissionText").toString(), QStringLiteral("未上报"));
     QCOMPARE(root->property("heavyShooterText").toString(), QStringLiteral("未上报"));
+    QVariant light; QVERIFY(QMetaObject::invokeMethod(root, "rmulModuleLight", Q_RETURN_ARG(QVariant, light), Q_ARG(QVariant, 3)));
+    QCOMPARE(light.toString(), QStringLiteral("unknown"));
     QVERIFY(msg->property("event16NoticeText").toString().isEmpty());
     robomaster::RobotModuleStatus modules; modules.set_modular_42mm(0);
     const QStringList states{QStringLiteral("离线"), QStringLiteral("在线"), QStringLiteral("安装异常")};
@@ -99,6 +101,10 @@ private slots:
     data.updateRobotModuleStatus(modules); data.recordMqttObservation("RobotModuleStatus", 1, 100005, 1005);
     QCOMPARE(root->property("heavyPermissionText").toString(), QStringLiteral("允许"));
     QCOMPARE(root->property("heavyShooterText").toString(), QStringLiteral("离线"));
+    QVERIFY(QMetaObject::invokeMethod(root, "rmulModuleLight", Q_RETURN_ARG(QVariant, light), Q_ARG(QVariant, 9)));
+    QCOMPARE(light.toString(), QStringLiteral("offline"));
+    QVERIFY(QMetaObject::invokeMethod(root, "rmulModuleLight", Q_RETURN_ARG(QVariant, light), Q_ARG(QVariant, 3)));
+    QCOMPARE(light.toString(), QStringLiteral("unknown"));
     modules.set_modular_42mm(3); data.updateRobotModuleStatus(modules);
     data.recordMqttObservation("RobotModuleStatus", 1, 100006, 1006);
     QCOMPARE(root->property("heavyPermissionText").toString(), QStringLiteral("无效值 3"));
@@ -109,6 +115,9 @@ private slots:
     QCOMPARE(OfficialMessageHandler::handle("Event", bytes(event), data), OfficialMessageHandler::Result::Parsed);
     data.recordMqttObservation("Event16", 0, 100008, 1008);
     QCOMPARE(msg->property("event16NoticeText").toString(), QStringLiteral("收到 42mm 发射机构安装成功事件"));
+    QCOMPARE(OfficialMessageHandler::handle("Event", bytes(event), data), OfficialMessageHandler::Result::Parsed);
+    QVERIFY(msg->property("event16NoticeText").toString().contains(QStringLiteral("来源未确认")));
+    data.recordMqttObservation("Event16", 0, 100008, 1008);
     QCOMPARE(data.getRobotById(1)->shooterLocked, before);
     data.setMqttSessionState(false, "1");
     QVERIFY(root->property("heavyPermissionText").toString().contains(QStringLiteral("历史")));
@@ -126,6 +135,27 @@ private slots:
     data.updateRobotModuleStatus(modules); data.recordMqttObservation("RobotModuleStatus", 1, 100009, 1009);
     QCOMPARE(root->property("heavyPermissionText").toString(), QStringLiteral("未上报"));
     QCOMPARE(root->property("heavyShooterText").toString(), QStringLiteral("未上报"));
+  }
+  void rmulTopRobotIconsUseOriginalAssets() {
+    Q_INIT_RESOURCE(qml); Q_INIT_RESOURCE(resources);
+    GameData data; TestUiMode mode;
+    QQuickWidget top; top.resize(1280, 170);
+    top.rootContext()->setContextProperty("gameData", &data);
+    top.rootContext()->setContextProperty("uiConfig", &mode);
+    top.setSource(QUrl("qrc:/qml/TopInfoBar.qml"));
+    QCOMPARE(top.status(), QQuickWidget::Ready); top.show();
+    auto visualFind = [](QQuickItem *root, const QString &name) -> QQuickItem * {
+      QList<QQuickItem *> pending{root};
+      while (!pending.isEmpty()) { auto *item = pending.takeLast(); if (item->objectName() == name) return item; pending.append(item->childItems()); }
+      return nullptr;
+    };
+    for (const auto &name : {"rmulRedRobot7", "rmulRedRobot3", "rmulRedRobot1", "rmulBlueRobot101", "rmulBlueRobot103", "rmulBlueRobot107"}) {
+      auto *item = visualFind(top.rootObject(), QString::fromLatin1(name)); QVERIFY(item); QVERIFY(item->isVisible());
+      auto *icon = visualFind(item, QStringLiteral("robotIconImage")); QVERIFY(icon);
+      QTRY_COMPARE(icon->property("status").toInt(), 1); // Image.Ready
+    }
+    mode.setMode("rmuc");
+    QTRY_VERIFY(!visualFind(top.rootObject(), QStringLiteral("rmulRedRobot1"))->isVisible());
   }
   void topBarVisualCapture() {
     const QString destination = qEnvironmentVariable("RM_UIB3_SNAPSHOT");
@@ -168,6 +198,14 @@ private slots:
     QCOMPARE(root->property("rmulBlueControl").toString(), QStringLiteral("45"));
     QCOMPARE(root->property("redControlReferenceRatio").toDouble(), 0.0);
     QCOMPARE(root->property("blueControlReferenceRatio").toDouble(), 45.0 / 600.0);
+    game.set_red_score(8); data.updateGameStatus(game);
+    QCOMPARE(root->property("rmulRedScore").toString(), QStringLiteral("来源未确认"));
+    QCOMPARE(root->property("rmulTime").toString(), QStringLiteral("来源未确认"));
+    game.set_red_score(0); data.updateGameStatus(game); data.recordMqttObservation("GameStatus", 0, 100001, 1001);
+    global.set_total_cp_enemy(99); data.updateGlobalUnitStatus(global);
+    QCOMPARE(root->property("rmulEnemyControl").toString(), QStringLiteral("来源未确认"));
+    QCOMPARE(root->property("blueControlReferenceRatio").toDouble(), -1.0);
+    global.set_total_cp_enemy(45); data.updateGlobalUnitStatus(global); data.recordMqttObservation("GlobalUnitStatus", 1, 100001, 1001);
     data.setMqttSessionState(false, "1");
     QCOMPARE(root->property("rmulTime").toString(), QStringLiteral("4:00 (历史)"));
     QCOMPARE(root->property("rmulAllyControl").toString(), QStringLiteral("0 (历史)"));
@@ -203,6 +241,13 @@ private slots:
       QVERIFY(bar->height() <= 76 && bar->width() <= width - 16);
       QVERIFY(red->mapToItem(root, QPointF()).x() + red->width() < blue->mapToItem(root, QPointF()).x());
       QVERIFY(bar->mapToItem(root, QPointF()).y() + bar->height() <= size.height());
+      for (const auto &name : {"rmulRedRobotIcons", "rmulBlueRobotIcons"}) {
+        auto *icons = root->findChild<QQuickItem *>(name); QVERIFY(icons);
+        for (auto *item : icons->childItems()) {
+          if (!item->objectName().startsWith("rmulRedRobot") && !item->objectName().startsWith("rmulBlueRobot")) continue;
+          QVERIFY(item->mapToItem(root, QPointF()).y() + item->height() <= size.height());
+        }
+      }
     }
   }
   void shootingHudUsesOfficialObservations() {
@@ -237,6 +282,21 @@ private slots:
     QCOMPARE(data.getRobotById(1)->muzzleVelocity, 0.0f);
     QVERIFY(!data.getRobotById(1)->isHeatOverLimit);
     QVERIFY(!data.getRobotById(1)->shooterLocked);
+    msg.set_last_projectile_fire_rate(18.0f); data.updateRobotDynamicStatus(msg);
+    QCOMPARE(root->property("speedDisplay").toString(), QStringLiteral("来源未确认"));
+    QVERIFY(!root->property("heavyHeatKnown").toBool());
+    msg.set_last_projectile_fire_rate(12.5f); data.updateRobotDynamicStatus(msg);
+    data.recordMqttObservation("RobotDynamicStatus", 1, 100001, 1001);
+    QVERIFY(root->property("heavyHeatKnown").toBool());
+    stat.set_max_heat(50); data.updateRobotStaticStatus(stat);
+    QVERIFY(!root->property("heavyHeatKnown").toBool());
+    stat.set_max_heat(100); data.updateRobotStaticStatus(stat); data.recordMqttObservation("RobotStaticStatus", 1, 100000, 1000);
+    QVERIFY(root->property("heavyHeatKnown").toBool());
+    data.setCurrentRobotId(3); data.setCurrentRobotId(1);
+    data.updateRobotDynamicStatus(msg); data.recordMqttObservation("RobotDynamicStatus", 1, 100001, 1001);
+    QVERIFY(!root->property("heavyHeatKnown").toBool());
+    data.updateRobotStaticStatus(stat); data.recordMqttObservation("RobotStaticStatus", 1, 100001, 1001);
+    QVERIFY(root->property("heavyHeatKnown").toBool());
     QQuickWidget health;
     health.rootContext()->setContextProperty("gameData", &data);
     health.setSource(QUrl(QStringLiteral("qrc:/qml/LeftBottomPanel.qml")));

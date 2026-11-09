@@ -255,6 +255,18 @@ Item {
         if (moduleReceipt.sessionState !== "current") return label + "（来源未确认）"
         return label
     }
+    // RMUL 的缺失字段及旧会话不能显示为在线或离线；RMUC 继续使用旧灯位。
+    function rmulModuleLight(index) {
+        if (uiConfigContext && uiConfigContext.competitionUiMode !== "rmul") return "legacy"
+        var names = {3: "video_transmission", 4: "rfid", 6: "uwb", 8: "small_shooter", 9: "big_shooter"}
+        var key = names[index]
+        if (!key || moduleSnapshot.source !== "official_mqtt" || moduleReceipt.sessionState !== "current"
+                || Number(moduleReceipt.identity) !== Number(currentRobot.robotId)) return "unknown"
+        var value = moduleSnapshot[key]
+        if (value === 1) return "online"
+        if (value === 0 || value === 2) return "offline"
+        return "unknown"
+    }
     readonly property string heavyPermissionText: moduleReading("modular_42mm")
     readonly property string heavyShooterText: moduleReading("big_shooter")
 
@@ -734,21 +746,21 @@ Item {
                         height: root.height * 0.10
                         Image{
                             id: moduleStateImage
-                            visible: !(root.showHeavyRmul && moduleStatusItem.index === 9)
+                            visible: !(root.showHeavyRmul && moduleStatusItem.index === 9) && root.rmulModuleLight(moduleStatusItem.index) !== "unknown"
 
                             width: root.width * 0.03
                             height: root.height * 0.09
                             anchors.left: parent.left
                             //记录颜色
-                            property string moduleState: (root.moduleStates && root.moduleStates[moduleStatusItem.index] === 0) ? "green" : "red"
+                            property string moduleState: root.rmulModuleLight(moduleStatusItem.index) === "online" || (root.rmulModuleLight(moduleStatusItem.index) === "legacy" && root.moduleStates && root.moduleStates[moduleStatusItem.index] === 0) ? "green" : "red"
                             source: "qrc:/images/my_robot/statusbar_signallamp_" + moduleStateImage.moduleState + "_single.png"
                             fillMode: Image.Stretch
                         }
                         Rectangle {
-                            visible: root.showHeavyRmul && moduleStatusItem.index === 9
+                            visible: (root.showHeavyRmul && moduleStatusItem.index === 9) || root.rmulModuleLight(moduleStatusItem.index) === "unknown"
                             width: root.width * 0.03; height: root.height * 0.07
                             anchors.left: parent.left; anchors.verticalCenter: parent.verticalCenter
-                            color: root.heavyShooterText === "在线" ? "#55d99e" : root.heavyShooterText === "离线" || root.heavyShooterText === "安装异常" ? "#f16666" : "#929ca2"
+                            color: root.showHeavyRmul && moduleStatusItem.index === 9 && root.heavyShooterText === "在线" ? "#55d99e" : root.showHeavyRmul && moduleStatusItem.index === 9 && (root.heavyShooterText === "离线" || root.heavyShooterText === "安装异常") ? "#f16666" : "#929ca2"
                             radius: 2
                         }
                         Text {
@@ -767,12 +779,12 @@ Item {
             Text {
                 objectName: "heavyInstallPermission"
                 visible: root.showHeavyRmul
-                anchors.right: parent.right; anchors.verticalCenter: parent.verticalCenter
-                width: root.width * 0.20
+                anchors.left: parent.right; anchors.leftMargin: -root.width * 0.20
+                anchors.verticalCenter: parent.verticalCenter
                 text: "42安装权限  " + root.heavyPermissionText + "\n42测速  " + root.heavyShooterText
                 color: root.heavyPermissionText === "允许" ? "#55d99e" : "#d5e0e5"
                 font.pixelSize: root.height * 0.055
-                wrapMode: Text.Wrap
+                wrapMode: Text.NoWrap
                 style: Text.Outline; styleColor: "black"
             }
         }

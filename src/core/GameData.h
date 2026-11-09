@@ -713,6 +713,7 @@ Q_PROPERTY(QVariantMap robotRespawnStatus READ robotRespawnStatus NOTIFY robotRe
   // Observation of Event 16 only; this is not the current installation state.
   Q_PROPERTY(QVariantMap lastEventObservation READ lastEventObservation NOTIFY lastEventObservationChanged)
   Q_PROPERTY(bool event16Received READ event16Received NOTIFY event16ReceivedChanged)
+  Q_PROPERTY(QString event16Source READ event16Source NOTIFY event16ReceivedChanged)
   Q_PROPERTY(QDateTime event16LastReceivedAt READ event16LastReceivedAt NOTIFY event16ReceivedChanged)
 
   Q_PROPERTY(uint maximumDifficultyLevel READ maximumDifficultyLevel NOTIFY techCoreMotionStateSyncUpdated)
@@ -747,8 +748,9 @@ public:
   QVariantMap robotModuleStatus() const;
   QVariantMap robotDynamicStatus() const;
   void clearRobotDynamicStatus();
-  QVariantMap gameStatusObservation() const { return {{QStringLiteral("received"), m_gameStatusReceived}, {QStringLiteral("fields"), m_gameStatusFields}, {QStringLiteral("accepted"), m_gameStatusAccepted}, {QStringLiteral("resultContextValid"), m_gameStatusResultContextValid}}; }
+  QVariantMap gameStatusObservation() const { return {{QStringLiteral("received"), m_gameStatusReceived}, {QStringLiteral("source"), m_gameStatusMqttVerified ? QStringLiteral("official_mqtt") : QStringLiteral("protocol_unverified")}, {QStringLiteral("fields"), m_gameStatusFields}, {QStringLiteral("accepted"), m_gameStatusAccepted}, {QStringLiteral("resultContextValid"), m_gameStatusResultContextValid}}; }
   QVariantMap lastEventObservation() const { return m_lastEventObservation; }
+  QString event16Source() const { return m_event16MqttVerified ? QStringLiteral("official_mqtt") : QStringLiteral("protocol_unverified"); }
   bool event16Received() const { return m_event16LastReceivedAt.isValid(); }
   QDateTime event16LastReceivedAt() const { return m_event16LastReceivedAt; }
 
@@ -1470,6 +1472,7 @@ private:
   QVariantMap m_dynamicObservation;
   QVariantMap m_dynamicAccepted;
   bool m_dynamicReceived = false;
+  bool m_dynamicMqttVerified = false;
   QVariantMap m_robotModuleStatusMap; // 当前身份的最近一次模块状态及字段 presence
   bool m_robotModuleStatusReceived = false;
   bool m_robotModuleMqttVerified = false; // 仅标识最近快照的接收来源，不改变模块业务状态
@@ -1560,6 +1563,8 @@ private:
   QVariantMap m_mqttTopicMetadata;
   QVariantMap m_mqttStaticMetadata;
   bool m_gameStatusReceived = false;
+  bool m_gameStatusMqttVerified = false;
+  bool m_event16MqttVerified = false;
   bool m_gameStatusResultContextValid = false;
   QVariantMap m_gameStatusFields;
   QVariantMap m_gameStatusAccepted;

@@ -5727,7 +5727,9 @@ void MainWindow::applyPanelResolutionScaling() {
   }
 
   if (m_leftBottomPanel) {
-    const QSize leftBottomSize = getScaledPanelSize(460, 200);
+    // Keep the original QML layout at 460 wide, but allow the 42mm status
+    // text to extend right without being clipped or wrapping.
+    const QSize leftBottomSize = getScaledPanelSize(600, 200);
     m_leftBottomPanel->setMinimumSize(leftBottomSize);
     m_leftBottomPanel->setFixedSize(leftBottomSize);
     setQmlRootScale(m_leftBottomPanel, scale);

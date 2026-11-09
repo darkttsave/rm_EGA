@@ -23,26 +23,27 @@ Item {
     readonly property var uiConfigContext: typeof uiConfig !== "undefined" ? uiConfig : null
     // qmllint enable unqualified
     readonly property string competitionUiMode: uiConfigContext ? uiConfigContext.competitionUiMode : "rmul"
-    readonly property var officialGame: gameDataContext ? gameDataContext.gameStatusObservation : ({})
+    readonly property var officialGame: { root.mqttMeta; return gameDataContext ? gameDataContext.gameStatusObservation : ({}); }
     readonly property var globalObservation: gameDataContext ? gameDataContext.globalHealthObservation : ({})
     readonly property var mqttMeta: gameDataContext ? gameDataContext.mqttReceptionMetadata : ({})
     readonly property var gameReceipt: (mqttMeta.topics || ({})).GameStatus || ({})
     readonly property var globalReceipt: (mqttMeta.topics || ({})).GlobalUnitStatus || ({})
-    function officialField(fields, receipt, key, identityOk) {
+    function officialField(fields, receipt, key, identityOk, source) {
         var field = (fields || ({}))[key] || ({})
         if (field.state === "invalid") return "无效"
         if (field.state !== "valid") return "未上报"
         if (!identityOk) return "身份不匹配"
+        if (source !== "official_mqtt") return "来源未确认"
         if (receipt.sessionState === "current") return String(field.value)
         if (receipt.sessionState === "historical" || receipt.sessionState === "disconnected") return String(field.value) + " (历史)"
         return "来源未确认"
     }
-    function gameField(key) { return officialField(officialGame.fields, gameReceipt, key, true) }
-    function globalField(key) { return officialField(globalObservation.rawFields, globalReceipt, key, globalObservation.identityMatches === true) }
+    function gameField(key) { return officialField(officialGame.fields, gameReceipt, key, true, officialGame.source) }
+    function globalField(key) { return officialField(globalObservation.rawFields, globalReceipt, key, globalObservation.identityMatches === true, globalObservation.source) }
     readonly property string rmulStage: gameField("current_stage")
     readonly property string rmulStageLabel: {
         var f = (officialGame.fields || ({})).current_stage || ({})
-        if (f.state !== "valid" || (gameReceipt.sessionState !== "current" && gameReceipt.sessionState !== "historical" && gameReceipt.sessionState !== "disconnected")) return rmulStage
+        if (officialGame.source !== "official_mqtt" || f.state !== "valid" || (gameReceipt.sessionState !== "current" && gameReceipt.sessionState !== "historical" && gameReceipt.sessionState !== "disconnected")) return rmulStage
         var names = ["未开始", "准备阶段", "裁判自检", "五秒倒计时", "比赛中", "比赛结算"]
         return names[Number(f.value)] + (gameReceipt.sessionState === "current" ? "" : " (历史)")
     }
@@ -60,7 +61,7 @@ Item {
     // a conversion to remaining control degree. The numeric value stays raw.
     function controlReferenceRatio(key) {
         var item = (globalObservation.rawFields || ({}))[key] || ({})
-        if (item.state !== "valid" || globalObservation.identityMatches !== true) return -1
+        if (item.state !== "valid" || globalObservation.identityMatches !== true || globalObservation.source !== "official_mqtt") return -1
         if (globalReceipt.sessionState !== "current" && globalReceipt.sessionState !== "historical" && globalReceipt.sessionState !== "disconnected") return -1
         return Math.max(0, Math.min(1, Number(item.value) / 600))
     }
@@ -69,7 +70,7 @@ Item {
     readonly property string rmulTime: {
         var raw = gameField("stage_countdown_sec")
         var f = (officialGame.fields || ({})).stage_countdown_sec || ({})
-        if (f.state !== "valid" || Number(f.value) < 0 || (gameReceipt.sessionState !== "current" && gameReceipt.sessionState !== "historical" && gameReceipt.sessionState !== "disconnected")) return raw
+        if (officialGame.source !== "official_mqtt" || f.state !== "valid" || Number(f.value) < 0 || (gameReceipt.sessionState !== "current" && gameReceipt.sessionState !== "historical" && gameReceipt.sessionState !== "disconnected")) return raw
         var n = Number(f.value)
         return Math.floor(n / 60) + ":" + (n % 60 < 10 ? "0" : "") + (n % 60) + (gameReceipt.sessionState === "current" ? "" : " (历史)")
     }
@@ -143,55 +144,105 @@ Item {
             id: compactBar
             objectName: "rmulCompactBar"
             width: Math.min(parent.width - 24, 1280)
-            height: 76
+            height: 68
             anchors.horizontalCenter: parent.horizontalCenter
             anchors.top: parent.top
 
-            Rectangle {
-                anchors.fill: parent
-                radius: 5
-                color: "#a5162028"
-                border.color: "#596a7480"
+            // Reuse the RMUC centre artwork; the surrounding area stays transparent.
+            Item {
+                id: rmulCenter
+                anchors.horizontalCenter: parent.horizontalCenter
+                anchors.top: parent.top
+                width: Math.min(340, parent.width * 0.36)
+                height: parent.height
+                Image {
+                    anchors.fill: parent
+                    source: "qrc:/images/top_middle_background_v2.png"
+                    fillMode: Image.PreserveAspectFit
+                    opacity: 0.8
+                }
+                Text {
+                    objectName: "rmulGameStage"
+                    anchors.horizontalCenter: parent.horizontalCenter; anchors.top: parent.top; anchors.topMargin: 7
+                    text: root.rmulStageLabel + "  ·  第 " + root.gameField("current_round") + " 局"
+                    color: "#a9d7e8"; font.pixelSize: 11; font.bold: true
+                    style: Text.Outline; styleColor: "black"
+                }
+                Text {
+                    objectName: "rmulGameTime"
+                    anchors.horizontalCenter: parent.horizontalCenter; anchors.verticalCenter: parent.verticalCenter; anchors.verticalCenterOffset: 9
+                    width: parent.width * 0.38; horizontalAlignment: Text.AlignHCenter
+                    text: root.rmulTime; color: "white"; font.pixelSize: 27; minimumPixelSize: 12; fontSizeMode: Text.HorizontalFit; font.bold: true
+                    style: Text.Outline; styleColor: "black"
+                }
+                Text {
+                    objectName: "rmulRedScore"; anchors.left: parent.left; anchors.leftMargin: parent.width * 0.10; anchors.verticalCenter: parent.verticalCenter
+                    width: parent.width * 0.17; horizontalAlignment: Text.AlignHCenter
+                    text: root.rmulRedScore; color: "#fff1ef"; font.pixelSize: 23; minimumPixelSize: 11; fontSizeMode: Text.HorizontalFit; font.bold: true; style: Text.Outline; styleColor: "black"
+                }
+                Text {
+                    objectName: "rmulBlueScore"; anchors.right: parent.right; anchors.rightMargin: parent.width * 0.10; anchors.verticalCenter: parent.verticalCenter
+                    width: parent.width * 0.17; horizontalAlignment: Text.AlignHCenter
+                    text: root.rmulBlueScore; color: "#e9f8ff"; font.pixelSize: 23; minimumPixelSize: 11; fontSizeMode: Text.HorizontalFit; font.bold: true; style: Text.Outline; styleColor: "black"
+                }
             }
-            RowLayout {
-                anchors.fill: parent
-                anchors.leftMargin: 12; anchors.rightMargin: 12
-                spacing: 0
-                Item {
-                    Layout.fillWidth: true; Layout.fillHeight: true
-                    Rectangle {
-                        anchors.left: parent.left; anchors.right: parent.right; anchors.top: parent.top; height: 15; color: "#53615c5d"
-                        Rectangle { objectName: "redControlReferenceBar"; anchors.left: parent.left; height: parent.height; width: parent.width * Math.max(0, root.redControlReferenceRatio); color: "#dc6860"; opacity: root.globalReceipt.sessionState === "current" ? 1 : 0.45 }
-                    }
-                    Column {
-                        anchors.left: parent.left; anchors.leftMargin: 10; anchors.verticalCenter: parent.verticalCenter; spacing: 3
-                        Text { text: "红方"; color: "#f18b82"; font.pixelSize: 13; font.bold: true }
-                        Text { objectName: "rmulRedControl"; text: "累计控制度  " + root.rmulRedControl + "  /  600参考"; color: "#d4dee3"; font.pixelSize: 13 }
-                    }
-                    Text { objectName: "rmulRedScore"; anchors.right: parent.right; anchors.rightMargin: 16; anchors.verticalCenter: parent.verticalCenter; text: root.rmulRedScore; color: "#fff1ef"; font.pixelSize: 26; font.bold: true }
+            Item {
+                anchors.left: parent.left; anchors.right: rmulCenter.left; anchors.rightMargin: 12
+                anchors.top: parent.top; anchors.bottom: parent.bottom
+                Text { anchors.right: parent.right; anchors.top: parent.top; text: "红方"; color: "#f18b82"; font.pixelSize: 13; font.bold: true; style: Text.Outline; styleColor: "black" }
+                Rectangle {
+                    anchors.left: parent.left; anchors.right: parent.right; anchors.top: parent.top; anchors.topMargin: 21
+                    height: 15; color: "#60504242"
+                    Rectangle { objectName: "redControlReferenceBar"; anchors.right: parent.right; height: parent.height; width: parent.width * Math.max(0, root.redControlReferenceRatio); color: "#dc6860"; opacity: root.globalReceipt.sessionState === "current" ? 1 : 0.45 }
                 }
-                Item {
-                    Layout.preferredWidth: Math.min(260, compactBar.width * 0.28)
-                    Layout.fillHeight: true
-                    Column {
-                        anchors.centerIn: parent; spacing: 1
-                        Text { objectName: "rmulGameStage"; anchors.horizontalCenter: parent.horizontalCenter; text: root.rmulStageLabel + "  ·  第 " + root.gameField("current_round") + " 局"; color: "#a9d7e8"; font.pixelSize: 12 }
-                        Text { objectName: "rmulGameTime"; anchors.horizontalCenter: parent.horizontalCenter; text: root.rmulTime; color: "white"; font.pixelSize: 28; font.bold: true }
-                        Text { anchors.horizontalCenter: parent.horizontalCenter; text: "红蓝比分  ·  官方观测"; color: "#a3b5bd"; font.pixelSize: 10 }
-                    }
+                Text { objectName: "rmulRedControl"; anchors.right: parent.right; anchors.top: parent.top; anchors.topMargin: 41; text: "累计控制度  " + root.rmulRedControl + "  /  600参考"; color: "#e2d6d5"; font.pixelSize: 13; style: Text.Outline; styleColor: "black" }
+            }
+            Item {
+                anchors.right: parent.right; anchors.left: rmulCenter.right; anchors.leftMargin: 12
+                anchors.top: parent.top; anchors.bottom: parent.bottom
+                Text { anchors.left: parent.left; anchors.top: parent.top; text: "蓝方"; color: "#83ccef"; font.pixelSize: 13; font.bold: true; style: Text.Outline; styleColor: "black" }
+                Rectangle {
+                    anchors.left: parent.left; anchors.right: parent.right; anchors.top: parent.top; anchors.topMargin: 21
+                    height: 15; color: "#60404c52"
+                    Rectangle { objectName: "blueControlReferenceBar"; anchors.left: parent.left; height: parent.height; width: parent.width * Math.max(0, root.blueControlReferenceRatio); color: "#59bce9"; opacity: root.globalReceipt.sessionState === "current" ? 1 : 0.45 }
                 }
-                Item {
-                    Layout.fillWidth: true; Layout.fillHeight: true
-                    Rectangle {
-                        anchors.left: parent.left; anchors.right: parent.right; anchors.top: parent.top; height: 15; color: "#53615c5d"
-                        Rectangle { objectName: "blueControlReferenceBar"; anchors.right: parent.right; height: parent.height; width: parent.width * Math.max(0, root.blueControlReferenceRatio); color: "#59bce9"; opacity: root.globalReceipt.sessionState === "current" ? 1 : 0.45 }
-                    }
-                    Column {
-                        anchors.right: parent.right; anchors.rightMargin: 10; anchors.verticalCenter: parent.verticalCenter; spacing: 3
-                        Text { anchors.right: parent.right; text: "蓝方"; color: "#83ccef"; font.pixelSize: 13; font.bold: true }
-                        Text { objectName: "rmulBlueControl"; anchors.right: parent.right; text: "累计控制度  " + root.rmulBlueControl + "  /  600参考"; color: "#d4dee3"; font.pixelSize: 13 }
-                    }
-                    Text { objectName: "rmulBlueScore"; anchors.left: parent.left; anchors.leftMargin: 16; anchors.verticalCenter: parent.verticalCenter; text: root.rmulBlueScore; color: "#e9f8ff"; font.pixelSize: 26; font.bold: true }
+                Text { objectName: "rmulBlueControl"; anchors.left: parent.left; anchors.top: parent.top; anchors.topMargin: 41; text: "累计控制度  " + root.rmulBlueControl + "  /  600参考"; color: "#d4e3e8"; font.pixelSize: 13; style: Text.Outline; styleColor: "black" }
+            }
+        }
+
+        // Reuse the original top-bar artwork. These are identity markers only;
+        // their presence or opacity does not imply connection or health.
+        Row {
+            objectName: "rmulRedRobotIcons"
+            anchors.left: compactBar.left; anchors.top: compactBar.bottom
+            anchors.topMargin: 4; spacing: 4
+            Repeater {
+                model: [{ id: 7, name: "哨兵", asset: "guard_avatar" },
+                        { id: 3, name: "步兵", asset: "teammate_avatar_soldier" },
+                        { id: 1, name: "重装", asset: "teammate_avatar_hero" }]
+                delegate: Item {
+                    required property var modelData
+                    objectName: "rmulRedRobot" + modelData.id
+                    width: 76; height: Math.max(0, Math.min(68, root.height - compactBar.height - 10))
+                    Image { objectName: "robotIconImage"; anchors.horizontalCenter: parent.horizontalCenter; anchors.top: parent.top; width: 68; height: Math.max(0, parent.height - 20); source: "qrc:/images/top_robots/red_" + parent.modelData.asset + ".png"; fillMode: Image.PreserveAspectFit }
+                    Text { anchors.horizontalCenter: parent.horizontalCenter; anchors.bottom: parent.bottom; text: parent.modelData.id + "  " + parent.modelData.name; color: "#f1c4c0"; font.pixelSize: 12; font.bold: true; style: Text.Outline; styleColor: "black" }
+                }
+            }
+        }
+        Row {
+            objectName: "rmulBlueRobotIcons"
+            anchors.right: compactBar.right; anchors.top: compactBar.bottom
+            anchors.topMargin: 4; spacing: 4
+            Repeater {
+                model: [{ id: 101, name: "重装", asset: "teammate_avatar_hero" },
+                        { id: 103, name: "步兵", asset: "teammate_avatar_soldier" },
+                        { id: 107, name: "哨兵", asset: "guard_avatar" }]
+                delegate: Item {
+                    required property var modelData
+                    objectName: "rmulBlueRobot" + modelData.id
+                    width: 76; height: Math.max(0, Math.min(68, root.height - compactBar.height - 10))
+                    Image { objectName: "robotIconImage"; anchors.horizontalCenter: parent.horizontalCenter; anchors.top: parent.top; width: 68; height: Math.max(0, parent.height - 20); source: "qrc:/images/top_robots/blue_" + parent.modelData.asset + ".png"; fillMode: Image.PreserveAspectFit }
+                    Text { anchors.horizontalCenter: parent.horizontalCenter; anchors.bottom: parent.bottom; text: (parent.modelData.id - 100) + "  " + parent.modelData.name; color: "#b5e3f4"; font.pixelSize: 12; font.bold: true; style: Text.Outline; styleColor: "black" }
                 }
             }
         }

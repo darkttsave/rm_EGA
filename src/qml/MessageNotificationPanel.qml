@@ -25,8 +25,9 @@ Item {
     readonly property bool showHeavyRmul: Number(robot.type) === 10 && (!uiConfigContext || uiConfigContext.competitionUiMode === "rmul")
     readonly property var reception: gameDataContext ? gameDataContext.mqttReceptionMetadata : ({})
     readonly property var eventReceipt: (reception.topics || ({})).Event16 || ({})
+    readonly property string event16Source: { root.reception; return gameDataContext ? gameDataContext.event16Source : ""; }
     readonly property string event16NoticeText: !gameDataContext || !gameDataContext.event16Received || !showHeavyRmul ? "" :
-        "收到 42mm 发射机构安装成功事件" + (eventReceipt.sessionState === "current" ? "" :
+        "收到 42mm 发射机构安装成功事件" + (event16Source !== "official_mqtt" ? "（来源未确认）" : eventReceipt.sessionState === "current" ? "" :
         eventReceipt.sessionState === "historical" || eventReceipt.sessionState === "disconnected" ? "（历史）" : "（来源未确认）")
     property var systemMsgList: {
         var original = root.gameDataContext ? root.gameDataContext.systemMessages : []

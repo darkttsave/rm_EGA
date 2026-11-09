@@ -2103,6 +2103,9 @@ void GameData::recordMqttObservation(const QString &topic, int identity, qint64 
   if (topic == QLatin1String("RobotModuleStatus")) {
     m_robotModuleMqttVerified = true;
   }
+  if (topic == QLatin1String("RobotDynamicStatus")) m_dynamicMqttVerified = true;
+  if (topic == QLatin1String("GameStatus")) m_gameStatusMqttVerified = true;
+  if (topic == QLatin1String("Event16")) m_event16MqttVerified = true;
   if (topic == QLatin1String("GlobalUnitStatus")) {
     m_globalHealthMqttVerified = true;
     for (auto it = m_globalHealthFields.cbegin(); it != m_globalHealthFields.cend(); ++it)
@@ -2174,6 +2177,7 @@ void GameData::recordMqttObservation(const QString &topic, int identity, qint64 
 QVariantMap GameData::robotDynamicStatus() const {
   return {{QStringLiteral("received"), m_dynamicReceived},
           {QStringLiteral("robotId"), m_dynamicReceived ? m_currentRobotId : 0},
+          {QStringLiteral("source"), m_dynamicMqttVerified ? QStringLiteral("official_mqtt") : QStringLiteral("protocol_unverified")},
           {QStringLiteral("fields"), m_dynamicObservation},
           {QStringLiteral("accepted"), m_dynamicAccepted}};
 }
@@ -2181,6 +2185,7 @@ QVariantMap GameData::robotDynamicStatus() const {
 void GameData::clearRobotDynamicStatus() {
   if (!m_dynamicReceived && m_dynamicObservation.isEmpty() && m_dynamicAccepted.isEmpty()) return;
   m_dynamicReceived = false;
+  m_dynamicMqttVerified = false;
   m_dynamicObservation.clear();
   m_dynamicAccepted.clear();
   emit robotDynamicStatusChanged();
@@ -2225,6 +2230,7 @@ void GameData::updateRobotDynamicStatus(const robomaster::RobotDynamicStatus &da
   markLegacyRange("experience_for_upgrade", data.experience_for_upgrade() <= 65535);
   markLegacyRange("out_of_combat_countdown", data.out_of_combat_countdown() <= 65535);
   m_dynamicObservation = fields;
+  m_dynamicMqttVerified = false;
   m_dynamicReceived = true;
 
   // Legacy projections are updated only when a value fits their existing type.
@@ -3134,6 +3140,7 @@ void GameData::updateGameState(const robomaster::GameInfo &data) {
 }
 // The latest official observation is separate from legacy/simulator projections.
 void GameData::updateGameStatus(const robomaster::GameStatus &data) {
+  m_gameStatusMqttVerified = false;
   QVariantMap fields;
   const bool hasSettlement = data.has_current_stage() && data.current_stage() == 5;
   const auto previousRound = m_gameStatusAccepted.value("current_round");
@@ -3942,6 +3949,7 @@ void GameData::processProtocolData(
     } else if (eventId == 13) {
       eventInfo(evt);
     } else if (eventId == 16) {
+      m_event16MqttVerified = false;
       m_event16LastReceivedAt = QDateTime::currentDateTime();
       emit event16ReceivedChanged();
     } else if (eventId == 100) {

@@ -26,7 +26,7 @@ Item {
 
     // Latest packet presence and its MQTT session are kept separate from the
     // legacy projection, which may have been written by a different source.
-    readonly property var dynamicSnapshot: gameDataContext ? gameDataContext.robotDynamicStatus : ({})
+    readonly property var dynamicSnapshot: { root.reception; return gameDataContext ? gameDataContext.robotDynamicStatus : ({}); }
     readonly property var reception: gameDataContext ? gameDataContext.mqttReceptionMetadata : ({})
     readonly property var dynamicReceipt: (reception.topics || ({})).RobotDynamicStatus || ({})
     readonly property var staticReceipt: (reception.staticByRobot || ({}))[String(myRobot.robotId)] || ({})
@@ -37,14 +37,16 @@ Item {
         if (field.state !== "valid") return "未上报";
         var value = Number(field.value);
         var formatted = decimals >= 0 ? value.toFixed(decimals) : String(value);
+        if (dynamicSnapshot.source !== "official_mqtt") return "来源未确认";
         if (dynamicReceipt.sessionState === "current") return formatted;
         if (dynamicReceipt.sessionState === "historical" || dynamicReceipt.sessionState === "disconnected") return formatted + " (历史)";
         return "来源未确认";
     }
     readonly property var officialHeat: dynamicField("current_heat")
-    readonly property var staticPerformance: myRobot.staticPerformance || ({})
-    readonly property bool heavyHeatKnown: isHeavy && dynamicReceipt.sessionState === "current"
+    readonly property var staticPerformance: { root.reception; return gameDataContext ? (gameDataContext.myRobot.staticPerformance || ({})) : ({}); }
+    readonly property bool heavyHeatKnown: isHeavy && dynamicSnapshot.source === "official_mqtt" && dynamicReceipt.sessionState === "current"
         && officialHeat.state === "valid" && staticReceipt.sessionState === "current"
+        && staticPerformance.source === "official_mqtt" && Number(staticReceipt.identityEpoch) === Number(reception.identityEpoch)
         && staticPerformance.max_heat !== undefined && Number(staticPerformance.max_heat) > 0
         && Number(staticPerformance.max_heat) <= 65535
     readonly property bool heavyHeatExceeded: heavyHeatKnown && Number(officialHeat.value) > Number(staticPerformance.max_heat)
