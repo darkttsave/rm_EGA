@@ -50,6 +50,22 @@ Item {
     readonly property string rmulBlueScore: gameField("blue_score")
     readonly property string rmulAllyControl: globalField("total_cp_ally")
     readonly property string rmulEnemyControl: globalField("total_cp_enemy")
+    readonly property int controlReceiver: Number(globalObservation.receiverId || 0)
+    readonly property bool controlReceiverRed: controlReceiver >= 1 && controlReceiver <= 11
+    readonly property bool controlReceiverBlue: controlReceiver >= 101 && controlReceiver <= 111
+    readonly property string rmulRedControl: controlReceiverRed ? rmulAllyControl : controlReceiverBlue ? rmulEnemyControl : "未上报"
+    readonly property string rmulBlueControl: controlReceiverRed ? rmulEnemyControl : controlReceiverBlue ? rmulAllyControl : "未上报"
+    // RMUL rules specify 600 initial control points. The protocol's accumulated
+    // field has no confirmed maximum; 600 is a visual reference, not a cap or
+    // a conversion to remaining control degree. The numeric value stays raw.
+    function controlReferenceRatio(key) {
+        var item = (globalObservation.rawFields || ({}))[key] || ({})
+        if (item.state !== "valid" || globalObservation.identityMatches !== true) return -1
+        if (globalReceipt.sessionState !== "current" && globalReceipt.sessionState !== "historical" && globalReceipt.sessionState !== "disconnected") return -1
+        return Math.max(0, Math.min(1, Number(item.value) / 600))
+    }
+    readonly property real redControlReferenceRatio: controlReferenceRatio(controlReceiverRed ? "total_cp_ally" : controlReceiverBlue ? "total_cp_enemy" : "")
+    readonly property real blueControlReferenceRatio: controlReferenceRatio(controlReceiverRed ? "total_cp_enemy" : controlReceiverBlue ? "total_cp_ally" : "")
     readonly property string rmulTime: {
         var raw = gameField("stage_countdown_sec")
         var f = (officialGame.fields || ({})).stage_countdown_sec || ({})
@@ -121,50 +137,63 @@ Item {
         objectName: "rmulTopInfo"
         visible: root.competitionUiMode === "rmul"
         anchors.fill: parent
-        anchors.margins: 8
-        RowLayout {
+        anchors.topMargin: 5
+
+        Item {
+            id: compactBar
+            objectName: "rmulCompactBar"
+            width: Math.min(parent.width - 24, 1280)
+            height: 76
             anchors.horizontalCenter: parent.horizontalCenter
             anchors.top: parent.top
-            width: Math.min(parent.width, 900)
-            height: 98
-            spacing: 8
+
             Rectangle {
-                Layout.fillWidth: true; Layout.fillHeight: true; radius: 5
-                color: "#b31b2731"; border.color: "#9c4747"
-                Column {
-                    anchors.centerIn: parent; spacing: 3
-                    Text { anchors.horizontalCenter: parent.horizontalCenter; text: "红方比分"; color: "#ffaaaa"; font.pixelSize: 14 }
-                    Text { objectName: "rmulRedScore"; anchors.horizontalCenter: parent.horizontalCenter; text: root.rmulRedScore; color: "white"; font.pixelSize: 19 }
+                anchors.fill: parent
+                radius: 5
+                color: "#a5162028"
+                border.color: "#596a7480"
+            }
+            RowLayout {
+                anchors.fill: parent
+                anchors.leftMargin: 12; anchors.rightMargin: 12
+                spacing: 0
+                Item {
+                    Layout.fillWidth: true; Layout.fillHeight: true
+                    Rectangle {
+                        anchors.left: parent.left; anchors.right: parent.right; anchors.top: parent.top; height: 15; color: "#53615c5d"
+                        Rectangle { objectName: "redControlReferenceBar"; anchors.left: parent.left; height: parent.height; width: parent.width * Math.max(0, root.redControlReferenceRatio); color: "#dc6860"; opacity: root.globalReceipt.sessionState === "current" ? 1 : 0.45 }
+                    }
+                    Column {
+                        anchors.left: parent.left; anchors.leftMargin: 10; anchors.verticalCenter: parent.verticalCenter; spacing: 3
+                        Text { text: "红方"; color: "#f18b82"; font.pixelSize: 13; font.bold: true }
+                        Text { objectName: "rmulRedControl"; text: "累计控制度  " + root.rmulRedControl + "  /  600参考"; color: "#d4dee3"; font.pixelSize: 13 }
+                    }
+                    Text { objectName: "rmulRedScore"; anchors.right: parent.right; anchors.rightMargin: 16; anchors.verticalCenter: parent.verticalCenter; text: root.rmulRedScore; color: "#fff1ef"; font.pixelSize: 26; font.bold: true }
+                }
+                Item {
+                    Layout.preferredWidth: Math.min(260, compactBar.width * 0.28)
+                    Layout.fillHeight: true
+                    Column {
+                        anchors.centerIn: parent; spacing: 1
+                        Text { objectName: "rmulGameStage"; anchors.horizontalCenter: parent.horizontalCenter; text: root.rmulStageLabel + "  ·  第 " + root.gameField("current_round") + " 局"; color: "#a9d7e8"; font.pixelSize: 12 }
+                        Text { objectName: "rmulGameTime"; anchors.horizontalCenter: parent.horizontalCenter; text: root.rmulTime; color: "white"; font.pixelSize: 28; font.bold: true }
+                        Text { anchors.horizontalCenter: parent.horizontalCenter; text: "红蓝比分  ·  官方观测"; color: "#a3b5bd"; font.pixelSize: 10 }
+                    }
+                }
+                Item {
+                    Layout.fillWidth: true; Layout.fillHeight: true
+                    Rectangle {
+                        anchors.left: parent.left; anchors.right: parent.right; anchors.top: parent.top; height: 15; color: "#53615c5d"
+                        Rectangle { objectName: "blueControlReferenceBar"; anchors.right: parent.right; height: parent.height; width: parent.width * Math.max(0, root.blueControlReferenceRatio); color: "#59bce9"; opacity: root.globalReceipt.sessionState === "current" ? 1 : 0.45 }
+                    }
+                    Column {
+                        anchors.right: parent.right; anchors.rightMargin: 10; anchors.verticalCenter: parent.verticalCenter; spacing: 3
+                        Text { anchors.right: parent.right; text: "蓝方"; color: "#83ccef"; font.pixelSize: 13; font.bold: true }
+                        Text { objectName: "rmulBlueControl"; anchors.right: parent.right; text: "累计控制度  " + root.rmulBlueControl + "  /  600参考"; color: "#d4dee3"; font.pixelSize: 13 }
+                    }
+                    Text { objectName: "rmulBlueScore"; anchors.left: parent.left; anchors.leftMargin: 16; anchors.verticalCenter: parent.verticalCenter; text: root.rmulBlueScore; color: "#e9f8ff"; font.pixelSize: 26; font.bold: true }
                 }
             }
-            Rectangle {
-                Layout.preferredWidth: Math.min(340, parent.width * 0.4); Layout.fillHeight: true; radius: 5
-                color: "#d015242d"; border.color: "#568b9f"
-                Column {
-                    anchors.centerIn: parent; spacing: 3
-                    Text { objectName: "rmulGameStage"; anchors.horizontalCenter: parent.horizontalCenter; text: root.rmulStageLabel + "  ·  第 " + root.gameField("current_round") + " 局"; color: "#a2dff2"; font.pixelSize: 13 }
-                    Text { objectName: "rmulGameTime"; anchors.horizontalCenter: parent.horizontalCenter; text: root.rmulTime; color: "white"; font.pixelSize: 24; font.bold: true }
-                    Text { anchors.horizontalCenter: parent.horizontalCenter; text: "比赛状态 · 官方观测"; color: "#a2b9c3"; font.pixelSize: 11 }
-                }
-            }
-            Rectangle {
-                Layout.fillWidth: true; Layout.fillHeight: true; radius: 5
-                color: "#b31b2731"; border.color: "#467b9c"
-                Column {
-                    anchors.centerIn: parent; spacing: 3
-                    Text { anchors.horizontalCenter: parent.horizontalCenter; text: "蓝方比分"; color: "#91d6ff"; font.pixelSize: 14 }
-                    Text { objectName: "rmulBlueScore"; anchors.horizontalCenter: parent.horizontalCenter; text: root.rmulBlueScore; color: "white"; font.pixelSize: 19 }
-                }
-            }
-        }
-        Text {
-            objectName: "rmulControlDegree"
-            anchors.horizontalCenter: parent.horizontalCenter
-            anchors.top: parent.top; anchors.topMargin: 106
-            width: parent.width; horizontalAlignment: Text.AlignHCenter
-            elide: Text.ElideRight
-            text: "己方累计控制度 " + root.rmulAllyControl + "     ·     对方累计控制度 " + root.rmulEnemyControl
-            color: "#c6dde6"; font.pixelSize: 14
         }
     }
 

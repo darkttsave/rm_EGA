@@ -57,6 +57,23 @@ template <typename T> QByteArray bytes(const T &message) {
 class TestOfficialMessageHandler : public QObject {
   Q_OBJECT
 private slots:
+  void topBarVisualCapture() {
+    const QString destination = qEnvironmentVariable("RM_UIB3_SNAPSHOT");
+    if (destination.isEmpty()) QSKIP("visual capture is opt-in");
+    Q_INIT_RESOURCE(qml); Q_INIT_RESOURCE(resources);
+    GameData data; data.setCurrentRobotId(1); data.setMqttSessionState(true, "1");
+    robomaster::GameStatus game; game.set_current_stage(4); game.set_current_round(2);
+    game.set_stage_countdown_sec(216); game.set_red_score(1); game.set_blue_score(2);
+    data.updateGameStatus(game); data.recordMqttObservation("GameStatus", 0, 100000, 1000);
+    robomaster::GlobalUnitStatus global; global.set_total_cp_ally(30); global.set_total_cp_enemy(40);
+    data.updateGlobalUnitStatus(global); data.recordMqttObservation("GlobalUnitStatus", 1, 100001, 1001);
+    QQuickWidget top; top.setResizeMode(QQuickWidget::SizeRootObjectToView);
+    top.setClearColor(QColor("#25323a")); top.resize(1600, 170);
+    top.rootContext()->setContextProperty("gameData", &data);
+    top.setSource(QUrl("qrc:/qml/TopInfoBar.qml"));
+    QCOMPARE(top.status(), QQuickWidget::Ready); top.show(); QTest::qWait(200);
+    QVERIFY(top.grabFramebuffer().save(destination));
+  }
   void rmulTopShowsOfficialStateAndHistory() {
     Q_INIT_RESOURCE(qml);
     GameData data; data.setCurrentRobotId(1); data.setMqttSessionState(true, "1");
@@ -77,6 +94,10 @@ private slots:
     QCOMPARE(root->property("rmulBlueScore").toString(), QStringLiteral("2"));
     QCOMPARE(root->property("rmulAllyControl").toString(), QStringLiteral("0"));
     QCOMPARE(root->property("rmulEnemyControl").toString(), QStringLiteral("45"));
+    QCOMPARE(root->property("rmulRedControl").toString(), QStringLiteral("0"));
+    QCOMPARE(root->property("rmulBlueControl").toString(), QStringLiteral("45"));
+    QCOMPARE(root->property("redControlReferenceRatio").toDouble(), 0.0);
+    QCOMPARE(root->property("blueControlReferenceRatio").toDouble(), 45.0 / 600.0);
     data.setMqttSessionState(false, "1");
     QCOMPARE(root->property("rmulTime").toString(), QStringLiteral("4:00 (历史)"));
     QCOMPARE(root->property("rmulAllyControl").toString(), QStringLiteral("0 (历史)"));
@@ -86,13 +107,32 @@ private slots:
     data.updateGlobalUnitStatus(global); data.recordMqttObservation("GlobalUnitStatus", 1, 100002, 1002);
     QCOMPARE(root->property("rmulAllyControl").toString(), QStringLiteral("未上报"));
     QCOMPARE(root->property("rmulEnemyControl").toString(), QStringLiteral("0"));
+    QCOMPARE(root->property("redControlReferenceRatio").toDouble(), -1.0);
     data.setCurrentRobotId(101);
     QCOMPARE(root->property("rmulEnemyControl").toString(), QStringLiteral("身份不匹配"));
+    global.Clear(); global.set_total_cp_ally(77); global.set_total_cp_enemy(33);
+    data.updateGlobalUnitStatus(global); data.recordMqttObservation("GlobalUnitStatus", 101, 100003, 1003);
+    QCOMPARE(root->property("rmulRedControl").toString(), QStringLiteral("33"));
+    QCOMPARE(root->property("rmulBlueControl").toString(), QStringLiteral("77"));
+    QCOMPARE(root->property("redControlReferenceRatio").toDouble(), 33.0 / 600.0);
+    QCOMPARE(root->property("blueControlReferenceRatio").toDouble(), 77.0 / 600.0);
+    global.set_total_cp_ally(900); data.updateGlobalUnitStatus(global);
+    data.recordMqttObservation("GlobalUnitStatus", 101, 100004, 1004);
+    QCOMPARE(root->property("rmulBlueControl").toString(), QStringLiteral("900"));
+    QCOMPARE(root->property("blueControlReferenceRatio").toDouble(), 1.0);
     top.show();
-    for (int width : {1280, 1600, 1920}) {
-      top.resize(width, 170); QTRY_COMPARE(root->property("width").toInt(), width);
+    for (const auto size : {QSize(1280, 136), QSize(1600, 170), QSize(1920, 170)}) {
+      const int width = size.width();
+      top.resize(size); QTRY_COMPARE(root->property("width").toInt(), width);
       auto *content = root->findChild<QQuickItem *>("rmulTopInfo");
       QVERIFY(content); QVERIFY(content->width() <= width);
+      auto *bar = root->findChild<QQuickItem *>("rmulCompactBar");
+      auto *red = root->findChild<QQuickItem *>("rmulRedControl");
+      auto *blue = root->findChild<QQuickItem *>("rmulBlueControl");
+      QVERIFY(bar && red && blue);
+      QVERIFY(bar->height() <= 76 && bar->width() <= width - 16);
+      QVERIFY(red->mapToItem(root, QPointF()).x() + red->width() < blue->mapToItem(root, QPointF()).x());
+      QVERIFY(bar->mapToItem(root, QPointF()).y() + bar->height() <= size.height());
     }
   }
   void shootingHudUsesOfficialObservations() {
